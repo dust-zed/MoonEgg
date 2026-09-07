@@ -15,7 +15,7 @@ pub enum SubmitResult {
 #[derive(Debug)]
 pub enum ReceiveResult<T> {
     Frame(DecodedFrame<T>),
-    NeedInput,
+    NotReady,
     EndOfStream,
 }
 
