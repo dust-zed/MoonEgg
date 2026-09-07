@@ -1,6 +1,6 @@
 //! 媒体轨道标识和轨道描述
 
-use crate::media::TimeBase;
+use crate::media::{TimeBase, TimeSpan, Timestamp, TrackFormat};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TrackId(u32);
@@ -15,14 +15,27 @@ impl TrackId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TimeSpan {
-    ticks: u64,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackInfo {
+    id: TrackId,
     time_base: TimeBase,
+    start_ticks: Option<i64>,
+    duration_ticks: Option<u64>,
+    format: TrackFormat,
 }
 
-impl TimeSpan {
-    pub const fn new(ticks: u64, time_base: TimeBase) -> TimeSpan {
-        Self { ticks, time_base }
+impl TrackInfo {
+    pub const fn start_time(&self) -> Option<Timestamp> {
+        match self.start_ticks {
+            Some(ticks) => Some(Timestamp::new(ticks, self.time_base)),
+            None => None,
+        }
+    }
+
+    pub const fn duration(&self) -> Option<TimeSpan> {
+        match self.duration_ticks {
+            Some(ticks) => Some(TimeSpan::new(ticks, self.time_base)),
+            None => None,
+        }
     }
 }

@@ -50,4 +50,8 @@ impl Packet {
     pub const fn duration(&self) -> Option<TimeSpan> {
         self.duration
     }
+
+    pub const fn is_keyframe(&self) -> bool {
+        self.is_keyframe
+    }
 }

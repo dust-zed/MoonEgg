@@ -52,7 +52,7 @@ pub struct Timestamp {
 }
 
 impl Timestamp {
-    pub fn new(ticks: i64, time_base: TimeBase) -> Self {
+    pub const fn new(ticks: i64, time_base: TimeBase) -> Self {
         Self { ticks, time_base }
     }
 
