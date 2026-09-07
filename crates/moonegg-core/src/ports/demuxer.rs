@@ -1,4 +1,4 @@
-//! 解析媒体容器，发现轨道，并按容器中的读取顺序输出压缩 Packe
+//! 解析媒体容器，发现轨道，并按容器中的读取顺序输出压缩 Packet
 
 use crate::media::{MediaTime, Packet, TrackInfo};
 
@@ -22,5 +22,5 @@ pub trait Demuxer {
 
     fn read_packet(&mut self) -> Result<ReadPacketResult, DemuxError>;
 
-    fn seek(&mut self, target: MediaTime) -> Result<ReadPacketResult, DemuxError>;
+    fn seek(&mut self, target: MediaTime) -> Result<MediaTime, DemuxError>;
 }
