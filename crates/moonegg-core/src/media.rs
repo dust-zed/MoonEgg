@@ -5,3 +5,7 @@ mod frame;
 mod packet;
 mod time;
 mod track;
+
+pub use packet::Packet;
+pub use time::{MediaDelta, MediaTime, Rounding, TimeBase, TimeError, TimeSpan, Timestamp};
+pub use track::TrackId;

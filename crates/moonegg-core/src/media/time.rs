@@ -150,6 +150,26 @@ pub enum Rounding {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeSpan {
+    ticks: u64,
+    time_base: TimeBase,
+}
+
+impl TimeSpan {
+    pub const fn new(ticks: u64, time_base: TimeBase) -> TimeSpan {
+        Self { ticks, time_base }
+    }
+
+    pub const fn ticks(self) -> u64 {
+        self.ticks
+    }
+
+    pub const fn time_base(self) -> TimeBase {
+        self.time_base
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeError {
     InvalidTimeBase,
     Overflow,

@@ -5,7 +5,7 @@ mod engine;
 mod error;
 mod metrics;
 
-mod media;
+pub mod media;
 mod pipeline;
 mod player;
 mod ports;
