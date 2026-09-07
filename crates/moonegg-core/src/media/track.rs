@@ -25,6 +25,30 @@ pub struct TrackInfo {
 }
 
 impl TrackInfo {
+    pub fn new(
+        id: TrackId,
+        time_base: TimeBase,
+        start_ticks: Option<i64>,
+        duration_ticks: Option<u64>,
+        format: TrackFormat,
+    ) -> Self {
+        Self {
+            id,
+            time_base,
+            start_ticks,
+            duration_ticks,
+            format,
+        }
+    }
+
+    pub const fn id(&self) -> TrackId {
+        self.id
+    }
+
+    pub const fn time_base(&self) -> TimeBase {
+        self.time_base
+    }
+
     pub const fn start_time(&self) -> Option<Timestamp> {
         match self.start_ticks {
             Some(ticks) => Some(Timestamp::new(ticks, self.time_base)),
@@ -37,5 +61,9 @@ impl TrackInfo {
             Some(ticks) => Some(TimeSpan::new(ticks, self.time_base)),
             None => None,
         }
+    }
+
+    pub fn format(&self) -> &TrackFormat {
+        &self.format
     }
 }

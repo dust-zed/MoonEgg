@@ -1,17 +1,19 @@
 //! 压缩轨道的编解码格式描述。
 
-use crate::media::{TimeBase, TimeSpan, Timestamp, TrackId};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CodecId {
+pub enum AudioCodecId {
     PcmS16Le,
     Aac,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoCodecId {
     H264,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioTrackFormat {
-    codec: CodecId,
+    codec: AudioCodecId,
     sample_rate: u32,
     channel_count: u16,
     codec_config: Vec<u8>,
@@ -19,7 +21,7 @@ pub struct AudioTrackFormat {
 
 impl AudioTrackFormat {
     pub fn new(
-        codec: CodecId,
+        codec: AudioCodecId,
         sample_rate: u32,
         channel_count: u16,
         codec_config: Vec<u8>,
@@ -32,7 +34,7 @@ impl AudioTrackFormat {
         }
     }
 
-    pub const fn codec(&self) -> CodecId {
+    pub const fn codec(&self) -> AudioCodecId {
         self.codec
     }
 
@@ -51,14 +53,14 @@ impl AudioTrackFormat {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VideoTrackFormat {
-    codec: CodecId,
+    codec: VideoCodecId,
     width: u32,
     height: u32,
     codec_config: Vec<u8>,
 }
 
 impl VideoTrackFormat {
-    pub fn new(codec: CodecId, width: u32, height: u32, codec_config: Vec<u8>) -> Self {
+    pub fn new(codec: VideoCodecId, width: u32, height: u32, codec_config: Vec<u8>) -> Self {
         Self {
             codec,
             width,
@@ -67,7 +69,7 @@ impl VideoTrackFormat {
         }
     }
 
-    pub const fn codec(&self) -> CodecId {
+    pub const fn codec(&self) -> VideoCodecId {
         self.codec
     }
 
