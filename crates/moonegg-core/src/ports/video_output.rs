@@ -10,7 +10,7 @@ pub enum VideoSubmitResult<T> {
 pub enum VideoOutputError {
     InvalidFormat,
     InvalidState,
-    SurfaceUnvailable,
+    SurfaceUnavailable,
     Platform,
 }
 

@@ -13,6 +13,12 @@ pub struct ClockSnapshot {
 }
 
 impl ClockSnapshot {
+    pub const fn new(media_time: MediaTime, observed_at: Instant) -> Self {
+        Self {
+            media_time,
+            observed_at,
+        }
+    }
     pub const fn media_time(self) -> MediaTime {
         self.media_time
     }
