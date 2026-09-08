@@ -56,6 +56,7 @@ pub enum QueueError {
     InvalidCapacity,
 }
 
+#[must_use = "queue push result be handled"]
 #[derive(Debug)]
 pub enum QueuePushResult<T> {
     Accepted,
@@ -108,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    fn drain_return_all_items_and_empties_queue() {
+    fn drain_returns_all_items_and_empties_queue() {
         let mut queue = test_bounded_queue();
 
         assert!(matches!(queue.push(token("1")), QueuePushResult::Accepted));
