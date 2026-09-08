@@ -126,6 +126,15 @@ impl MediaTime {
 
         Ok(MediaDelta { nanoseconds })
     }
+
+    pub fn checked_add(self, delta: MediaDelta) -> Result<Self, TimeError> {
+        let nanoseconds = self
+            .nanoseconds
+            .checked_add(delta.nanoseconds())
+            .ok_or(TimeError::Overflow)?;
+
+        Ok(Self::from_nanoseconds(nanoseconds))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

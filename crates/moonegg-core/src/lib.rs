@@ -8,7 +8,7 @@ mod metrics;
 pub mod media;
 mod pipeline;
 mod player;
-mod ports;
+pub mod ports;
 mod runtime;
 mod timing;
 

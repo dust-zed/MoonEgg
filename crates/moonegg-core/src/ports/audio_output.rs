@@ -40,7 +40,7 @@ impl AudioPlaybackPosition {
 pub enum AudioOutputError {
     InvalidFormat,
     InvalidState,
-    DeviceUnavaiable,
+    DeviceUnavailable,
     Platform,
 }
 
