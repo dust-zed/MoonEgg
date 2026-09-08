@@ -3,3 +3,4 @@
 mod coordinator;
 mod epoch;
 mod queue;
+pub(crate) use coordinator::{CoordinateVideoError, VideoStepResult, coordinate_video_frame};

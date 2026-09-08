@@ -3,4 +3,5 @@
 mod av_sync;
 mod clock;
 
+pub use av_sync::{AvSync, AvSyncError, VideoSyncDecision};
 pub use clock::{AudioClock, ClockError, ClockSnapshot};
