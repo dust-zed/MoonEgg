@@ -82,7 +82,7 @@ impl AudioBuffer {
             return Err(AudioBufferError::InvalidChannelCount);
         }
 
-        if samples.len().is_multiple_of(usize::from(channel_count)) {
+        if !samples.len().is_multiple_of(usize::from(channel_count)) {
             return Err(AudioBufferError::IncompleteFrame);
         }
 
