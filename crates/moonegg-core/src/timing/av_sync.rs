@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use crate::{
-    media::{MediaDelta, MediaTime, TimeError},
+    media::{MediaDelta, MediaTime},
     timing::ClockSnapshot,
 };
 

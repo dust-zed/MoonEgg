@@ -211,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    fn presents_frames_extractly_on_tolerance_boundaries() {
+    fn presents_frames_exactly_on_tolerance_boundaries() {
         let now = Instant::now();
         let snapshot = audio_snapshot(now);
         let sync = av_sync();
