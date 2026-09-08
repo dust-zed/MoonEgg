@@ -1,7 +1,4 @@
-use std::{
-    sync::WaitTimeoutResult,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use crate::{
     media::{MediaDelta, MediaTime, TimeError},
