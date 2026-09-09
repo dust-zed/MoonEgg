@@ -3,3 +3,5 @@
 mod control_loop;
 mod shutdown;
 mod worker;
+
+pub(crate) use control_loop::{ControlLoop, ControlLoopExit, ControlMessage, ControlResult};
