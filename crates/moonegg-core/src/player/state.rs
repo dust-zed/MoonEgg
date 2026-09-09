@@ -29,6 +29,8 @@ impl PlayerState {
 
             (Self::Paused, StateAction::Pause) => Ok(Self::Paused),
 
+            (Self::Ready | Self::Playing | Self::Paused, StateAction::Seek) => Ok(self),
+
             (
                 Self::Idle
                 | Self::Preparing
@@ -61,6 +63,7 @@ pub enum StateAction {
     Play,
     Pause,
     Stop,
+    Seek,
     Release,
     FatalError,
 }

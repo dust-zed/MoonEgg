@@ -5,4 +5,5 @@ mod config;
 mod event;
 mod state;
 
+pub(crate) use command::PlayerCommand;
 pub(crate) use state::{InvalidTransition, PlayerState, StateAction};
