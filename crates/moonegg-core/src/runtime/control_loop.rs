@@ -1,9 +1,13 @@
+use std::sync::mpsc::{Receiver, Sender};
+
 use crate::{
     media::MediaTime,
     pipeline::{EpochError, PlaybackEpoch},
     player::{InvalidTransition, PlayerCommand, PlayerEvent, PlayerState, StateAction},
     runtime::worker::WorkerEvent,
 };
+
+pub type ControlResult = Result<ControlOutcome, ControlError>;
 
 pub struct ControlLoop {
     state: PlayerState,
@@ -24,6 +28,44 @@ impl ControlLoop {
 
     pub const fn epoch(&self) -> PlaybackEpoch {
         self.epoch
+    }
+
+    // 这里使用 mut self 而不是 &mut self 很重要：
+    // 启动控制线程时，把整个 ControlLoop 所有权移动进线程，从此只有该线程能访问状态。
+    pub fn run(
+        mut self,
+        message_receiver: Receiver<ControlMessage>,
+        result_sender: Sender<ControlResult>,
+    ) -> ControlLoopExit {
+        loop {
+            let message = match message_receiver.recv() {
+                Ok(message) => message,
+                Err(_) => {
+                    return ControlLoopExit::InputDisconnected;
+                }
+            };
+
+            let result = self.handle_message(message);
+
+            let fatal = matches!(
+                &result,
+                Err(ControlError::UnexpectedWorkEvent { .. } | ControlError::Epoch(_))
+            );
+
+            let released = self.state == PlayerState::Released;
+
+            if result_sender.send(result).is_err() {
+                return ControlLoopExit::OutputDisconnected;
+            }
+
+            if fatal {
+                return ControlLoopExit::FatalControlError;
+            }
+
+            if released {
+                return ControlLoopExit::Released;
+            }
+        }
     }
 
     pub fn handle_message(
@@ -202,4 +244,12 @@ pub enum ControlError {
         transition: InvalidTransition,
     },
     Epoch(EpochError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlLoopExit {
+    Released,
+    InputDisconnected,
+    OutputDisconnected,
+    FatalControlError,
 }
