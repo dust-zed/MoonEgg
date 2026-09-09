@@ -1,9 +1,12 @@
-use crate::player::PlayerState;
+use crate::{error::PlaybackError, player::PlayerState};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum PlayerEvent {
     StateChanged {
         previous: PlayerState,
         current: PlayerState,
+    },
+    PlaybackFailed {
+        error: PlaybackError,
     },
 }

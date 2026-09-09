@@ -113,6 +113,25 @@ impl ControlLoop {
                     }),
                 })
             }
+            WorkerEvent::Failed { epoch, error } => {
+                if epoch != self.epoch {
+                    return Ok(ControlOutcome::none());
+                }
+
+                let next_state = self
+                    .state
+                    .transition(StateAction::FatalError)
+                    .map_err(ControlError::InvalidTransition)?;
+
+                let next_epoch = self.epoch.next().map_err(ControlError::Epoch)?;
+                self.state = next_state;
+                self.epoch = next_epoch;
+
+                Ok(ControlOutcome {
+                    effect: Some(ControlEffect::CleanupAfterFailure { epoch: next_epoch }),
+                    event: Some(PlayerEvent::PlaybackFailed { error }),
+                })
+            }
         }
     }
 }
@@ -132,6 +151,9 @@ pub enum ControlEffect {
         epoch: PlaybackEpoch,
     },
     Release {
+        epoch: PlaybackEpoch,
+    },
+    CleanupAfterFailure {
         epoch: PlaybackEpoch,
     },
 }

@@ -1,6 +1,12 @@
-use crate::pipeline::PlaybackEpoch;
+use crate::{error::PlaybackError, pipeline::PlaybackEpoch};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum WorkerEvent {
-    PreparationCompleted { epoch: PlaybackEpoch },
+    PreparationCompleted {
+        epoch: PlaybackEpoch,
+    },
+    Failed {
+        epoch: PlaybackEpoch,
+        error: PlaybackError,
+    },
 }

@@ -31,8 +31,8 @@ impl ClockSnapshot {
 #[derive(Debug)]
 pub struct AudioClock {
     sample_rate: u32,
-    anchor_media: MediaTime,
-    anchor_played_frames: u64,
+    anchor_media: MediaTime,   // 媒体时间
+    anchor_played_frames: u64, // 设备累计播放 frame，考虑 seek 情况
 }
 
 impl AudioClock {
