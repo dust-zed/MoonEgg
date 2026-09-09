@@ -1,7 +1,8 @@
 use crate::{
     media::MediaTime,
     pipeline::{EpochError, PlaybackEpoch},
-    player::{InvalidTransition, PlayerCommand, PlayerState, StateAction},
+    player::{InvalidTransition, PlayerCommand, PlayerEvent, PlayerState, StateAction},
+    runtime::worker::WorkerEvent,
 };
 
 pub struct ControlLoop {
@@ -28,7 +29,7 @@ impl ControlLoop {
     pub fn handle_command(
         &mut self,
         command: PlayerCommand,
-    ) -> Result<ControlEffect, ControlError> {
+    ) -> Result<ControlOutcome, ControlError> {
         let action = match command {
             PlayerCommand::Prepare => StateAction::BeginPrepare,
             PlayerCommand::Play => StateAction::Play,
@@ -42,11 +43,10 @@ impl ControlLoop {
         let next = previous
             .transition(action)
             .map_err(ControlError::InvalidTransition)?;
-        self.state = next;
 
         let repeated_command = previous == next && !matches!(command, PlayerCommand::Seek(_));
         if repeated_command {
-            return Ok(ControlEffect::None);
+            return Ok(ControlOutcome::none());
         }
 
         let invalidates_pipeline = matches!(
@@ -74,10 +74,50 @@ impl ControlLoop {
             PlayerCommand::Stop => ControlEffect::Stop { epoch: next_epoch },
             PlayerCommand::Release => ControlEffect::Release { epoch: next_epoch },
         };
-        Ok(effect)
+        let event = if previous != next {
+            Some(PlayerEvent::StateChanged {
+                previous,
+                current: next,
+            })
+        } else {
+            None
+        };
+        Ok(ControlOutcome {
+            effect: Some(effect),
+            event,
+        })
+    }
+
+    pub fn handle_worker_event(
+        &mut self,
+        event: WorkerEvent,
+    ) -> Result<ControlOutcome, ControlError> {
+        match event {
+            WorkerEvent::PreparationCompleted { epoch } => {
+                if epoch != self.epoch {
+                    return Ok(ControlOutcome::none());
+                }
+
+                let previous = self.state;
+
+                let next = previous
+                    .transition(StateAction::PreparationCompleted)
+                    .map_err(ControlError::InvalidTransition)?;
+
+                self.state = next;
+                Ok(ControlOutcome {
+                    effect: None,
+                    event: Some(PlayerEvent::StateChanged {
+                        previous,
+                        current: next,
+                    }),
+                })
+            }
+        }
     }
 }
 
+#[derive(Debug)]
 pub enum ControlEffect {
     BeginPrepare {
         epoch: PlaybackEpoch,
@@ -94,7 +134,21 @@ pub enum ControlEffect {
     Release {
         epoch: PlaybackEpoch,
     },
-    None,
+}
+
+#[derive(Debug)]
+pub struct ControlOutcome {
+    pub effect: Option<ControlEffect>,
+    pub event: Option<PlayerEvent>,
+}
+
+impl ControlOutcome {
+    pub fn none() -> Self {
+        Self {
+            effect: None,
+            event: None,
+        }
+    }
 }
 
 pub enum ControlError {
