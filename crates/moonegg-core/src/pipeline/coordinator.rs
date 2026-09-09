@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use crate::{
     media::DecodedFrame,
+    pipeline::{EpochItem, PlaybackEpoch},
     ports::{VideoOutput, VideoOutputError, VideoSubmitResult},
     timing::{AvSync, AvSyncError, ClockSnapshot, VideoSyncDecision},
 };
@@ -10,11 +11,11 @@ use crate::{
 pub enum VideoStepResult<T> {
     WaitUntil {
         deadline: Instant,
-        frame: DecodedFrame<T>,
+        item: EpochItem<DecodedFrame<T>>,
     },
     Submitted,
-    Discarded,
-    Backpressure(DecodedFrame<T>),
+    Discarded(VideoDiscardReason),
+    Backpressure(EpochItem<DecodedFrame<T>>),
 }
 
 #[derive(Debug)]
@@ -23,31 +24,49 @@ pub enum CoordinateVideoError {
     Output(VideoOutputError),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoDiscardReason {
+    Late,
+    StaleEpoch,
+}
+
 /// 协调函数
 pub fn coordinate_video_frame<O>(
     sync: &AvSync,
     output: &mut O,
-    frame: DecodedFrame<O::FramePayload>,
+    frame: EpochItem<DecodedFrame<O::FramePayload>>,
+    current_epoch: PlaybackEpoch,
     audio_snapshot: ClockSnapshot,
     now: Instant,
 ) -> Result<VideoStepResult<O::FramePayload>, CoordinateVideoError>
 where
     O: VideoOutput,
 {
+    let (frame_epoch, frame) = frame.into_parts();
+    if frame_epoch != current_epoch {
+        output
+            .discard(frame)
+            .map_err(CoordinateVideoError::Output)?;
+        return Ok(VideoStepResult::Discarded(VideoDiscardReason::StaleEpoch));
+    }
+
     match sync.decide(frame.pts(), audio_snapshot, now) {
-        Ok(VideoSyncDecision::WaitUntil(deadline)) => {
-            Ok(VideoStepResult::WaitUntil { deadline, frame })
-        }
+        Ok(VideoSyncDecision::WaitUntil(deadline)) => Ok(VideoStepResult::WaitUntil {
+            deadline,
+            item: EpochItem::new(frame_epoch, frame),
+        }),
         Ok(VideoSyncDecision::PresentNow) => match output.present(frame) {
             Ok(VideoSubmitResult::Accepted) => Ok(VideoStepResult::Submitted),
-            Ok(VideoSubmitResult::Backpressure(frame)) => Ok(VideoStepResult::Backpressure(frame)),
+            Ok(VideoSubmitResult::Backpressure(frame)) => Ok(VideoStepResult::Backpressure(
+                EpochItem::new(frame_epoch, frame),
+            )),
             Err(err) => Err(CoordinateVideoError::Output(err)),
         },
         Ok(VideoSyncDecision::Drop) => {
             output
                 .discard(frame)
                 .map_err(CoordinateVideoError::Output)?;
-            Ok(VideoStepResult::Discarded)
+            Ok(VideoStepResult::Discarded(VideoDiscardReason::Late))
         }
         Err(err) => Err(CoordinateVideoError::Sync(err)),
     }
@@ -59,7 +78,10 @@ mod tests {
 
     use crate::{
         media::{DecodedFrame, MediaDelta, MediaTime, TrackId},
-        pipeline::{VideoStepResult, coordinate_video_frame},
+        pipeline::{
+            EpochItem, PlaybackEpoch, VideoStepResult, coordinate_video_frame,
+            coordinator::VideoDiscardReason,
+        },
         ports::VideoOutput,
         timing::{AvSync, ClockSnapshot, VideoSyncDecision},
     };
@@ -115,6 +137,10 @@ mod tests {
         DecodedFrame::new(TrackId::new(1), media_time_ms(pts_ms), token)
     }
 
+    fn video_item(epoch: PlaybackEpoch, pts_ms: i64, token: u32) -> EpochItem<DecodedFrame<u32>> {
+        EpochItem::new(epoch, video_frame(pts_ms, token))
+    }
+
     fn av_sync() -> AvSync {
         AvSync::new(
             media_delta_ms(10), // 允许提前 10 ms
@@ -131,19 +157,24 @@ mod tests {
     fn returns_early_frame_to_pipeline_with_deadline() {
         let now = Instant::now();
         let snapshot = audio_snapshot(now);
+        let epoch = PlaybackEpoch::INITIAL;
         let mut output = RecordingVideoOutput::default();
 
         let result = coordinate_video_frame(
             &av_sync(),
             &mut output,
-            video_frame(1_080, 7),
+            video_item(epoch, 1_080, 7),
+            epoch,
             snapshot,
             now,
         )
         .unwrap();
 
         match result {
-            VideoStepResult::WaitUntil { deadline, frame } => {
+            VideoStepResult::WaitUntil { deadline, item } => {
+                let (returned_epoch, frame) = item.into_parts();
+
+                assert_eq!(returned_epoch, epoch);
                 assert_eq!(deadline.duration_since(now), Duration::from_millis(70));
                 assert_eq!(frame.into_payload(), 7);
             }
@@ -158,11 +189,18 @@ mod tests {
     fn submits_frame_inside_tolerance_window() {
         let now = Instant::now();
         let snapshot = audio_snapshot(now);
+        let epoch = PlaybackEpoch::INITIAL;
         let mut output = RecordingVideoOutput::default();
 
-        let result =
-            coordinate_video_frame(&av_sync(), &mut output, video_frame(1005, 8), snapshot, now)
-                .unwrap();
+        let result = coordinate_video_frame(
+            &av_sync(),
+            &mut output,
+            video_item(epoch, 1005, 8),
+            epoch,
+            snapshot,
+            now,
+        )
+        .unwrap();
         assert!(matches!(result, VideoStepResult::Submitted));
         assert_eq!(output.presented.as_slice(), &[8]);
         assert!(output.discarded.is_empty());
@@ -172,12 +210,22 @@ mod tests {
     fn discards_frame_later_than_late_tolerance() {
         let now = Instant::now();
         let snapshot = audio_snapshot(now);
+        let epoch = PlaybackEpoch::INITIAL;
         let mut output = RecordingVideoOutput::default();
 
-        let result =
-            coordinate_video_frame(&av_sync(), &mut output, video_frame(940, 9), snapshot, now)
-                .unwrap();
-        assert!(matches!(result, VideoStepResult::Discarded));
+        let result = coordinate_video_frame(
+            &av_sync(),
+            &mut output,
+            video_item(epoch, 940, 9),
+            epoch,
+            snapshot,
+            now,
+        )
+        .unwrap();
+        assert!(matches!(
+            result,
+            VideoStepResult::Discarded(VideoDiscardReason::Late)
+        ));
         assert!(output.presented.is_empty());
         assert_eq!(output.discarded.as_slice(), &[9]);
     }
@@ -186,6 +234,7 @@ mod tests {
     fn returns_frame_when_video_output_applies_backpressure() {
         let now = Instant::now();
         let snapshot = audio_snapshot(now);
+        let epoch = PlaybackEpoch::INITIAL;
         let mut output = RecordingVideoOutput {
             backpressure: true,
             ..RecordingVideoOutput::default()
@@ -194,14 +243,17 @@ mod tests {
         let result = coordinate_video_frame(
             &av_sync(),
             &mut output,
-            video_frame(1000, 10),
+            video_item(epoch, 1000, 10),
+            epoch,
             snapshot,
             now,
         )
         .unwrap();
 
         match result {
-            VideoStepResult::Backpressure(frame) => {
+            VideoStepResult::Backpressure(item) => {
+                let (returned_epoch, frame) = item.into_parts();
+                assert_eq!(returned_epoch, epoch);
                 assert_eq!(frame.into_payload(), 10);
             }
             other => panic!("expected Backpressure, got {other:?}"),
@@ -222,5 +274,33 @@ mod tests {
                 .unwrap();
             assert!(matches!(decision, VideoSyncDecision::PresentNow));
         }
+    }
+
+    #[test]
+    fn discards_frame_from_stale_epoch() {
+        let now = Instant::now();
+        let snapshot = audio_snapshot(now);
+        let mut output = RecordingVideoOutput::default();
+
+        let old_epoch = PlaybackEpoch::INITIAL;
+        let current_epoch = old_epoch.next().unwrap();
+
+        let result = coordinate_video_frame(
+            &av_sync(),
+            &mut output,
+            video_item(old_epoch, 1_000, 11),
+            current_epoch,
+            snapshot,
+            now,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            result,
+            VideoStepResult::Discarded(VideoDiscardReason::StaleEpoch)
+        ));
+
+        assert_eq!(output.discarded.as_slice(), &[11]);
+        assert!(output.presented.is_empty());
     }
 }

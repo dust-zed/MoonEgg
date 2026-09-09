@@ -15,6 +15,7 @@ impl PlaybackEpoch {
     }
 }
 
+#[derive(Debug)]
 pub struct EpochItem<T> {
     epoch: PlaybackEpoch,
     value: T,
