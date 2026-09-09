@@ -121,8 +121,8 @@ impl ControlLoop {
 
         let effect = match command {
             PlayerCommand::Prepare => ControlEffect::BeginPrepare { epoch: next_epoch },
-            PlayerCommand::Play => ControlEffect::StartPlayback,
-            PlayerCommand::Pause => ControlEffect::PausePlayback,
+            PlayerCommand::Play => ControlEffect::StartPlayback { epoch: next_epoch },
+            PlayerCommand::Pause => ControlEffect::PausePlayback { epoch: next_epoch },
             PlayerCommand::Seek(target) => ControlEffect::Seek {
                 target,
                 epoch: next_epoch,
@@ -203,8 +203,12 @@ pub enum ControlEffect {
     BeginPrepare {
         epoch: PlaybackEpoch,
     },
-    StartPlayback,
-    PausePlayback,
+    StartPlayback {
+        epoch: PlaybackEpoch,
+    },
+    PausePlayback {
+        epoch: PlaybackEpoch,
+    },
     Seek {
         target: MediaTime,
         epoch: PlaybackEpoch,
@@ -218,6 +222,20 @@ pub enum ControlEffect {
     CleanupAfterFailure {
         epoch: PlaybackEpoch,
     },
+}
+
+impl ControlEffect {
+    pub const fn epoch(&self) -> PlaybackEpoch {
+        match self {
+            Self::BeginPrepare { epoch }
+            | Self::StartPlayback { epoch }
+            | Self::PausePlayback { epoch }
+            | Self::Seek { epoch, .. }
+            | Self::Stop { epoch }
+            | Self::Release { epoch }
+            | Self::CleanupAfterFailure { epoch } => *epoch,
+        }
+    }
 }
 
 #[derive(Debug)]
