@@ -26,6 +26,16 @@ impl ControlLoop {
         self.epoch
     }
 
+    pub fn handle_message(
+        &mut self,
+        message: ControlMessage,
+    ) -> Result<ControlOutcome, ControlError> {
+        match message {
+            ControlMessage::Command(command) => self.handle_command(command),
+            ControlMessage::WorkerEvent(event) => self.handle_worker_event(event),
+        }
+    }
+
     pub fn handle_command(
         &mut self,
         command: PlayerCommand,
@@ -40,9 +50,13 @@ impl ControlLoop {
         };
 
         let previous = self.state;
-        let next = previous
-            .transition(action)
-            .map_err(ControlError::InvalidTransition)?;
+        let next =
+            previous
+                .transition(action)
+                .map_err(|transition| ControlError::CommandRejected {
+                    command,
+                    transition,
+                })?;
 
         let repeated_command = previous == next && !matches!(command, PlayerCommand::Seek(_));
         if repeated_command {
@@ -102,7 +116,7 @@ impl ControlLoop {
 
                 let next = previous
                     .transition(StateAction::PreparationCompleted)
-                    .map_err(ControlError::InvalidTransition)?;
+                    .map_err(|transition| ControlError::UnexpectedWorkEvent { transition })?;
 
                 self.state = next;
                 Ok(ControlOutcome {
@@ -121,7 +135,7 @@ impl ControlLoop {
                 let next_state = self
                     .state
                     .transition(StateAction::FatalError)
-                    .map_err(ControlError::InvalidTransition)?;
+                    .map_err(|transition| ControlError::UnexpectedWorkEvent { transition })?;
 
                 let next_epoch = self.epoch.next().map_err(ControlError::Epoch)?;
                 self.state = next_state;
@@ -134,6 +148,12 @@ impl ControlLoop {
             }
         }
     }
+}
+
+#[derive(Debug)]
+pub enum ControlMessage {
+    Command(PlayerCommand),
+    WorkerEvent(WorkerEvent),
 }
 
 #[derive(Debug)]
@@ -174,6 +194,12 @@ impl ControlOutcome {
 }
 
 pub enum ControlError {
-    InvalidTransition(InvalidTransition),
+    CommandRejected {
+        command: PlayerCommand,
+        transition: InvalidTransition,
+    },
+    UnexpectedWorkEvent {
+        transition: InvalidTransition,
+    },
     Epoch(EpochError),
 }
