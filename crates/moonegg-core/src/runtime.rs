@@ -5,5 +5,7 @@ mod effect_executor;
 mod shutdown;
 mod worker;
 
-pub(crate) use control_loop::{ControlLoop, ControlLoopExit, ControlMessage, ControlResult};
-pub(crate) use effect_executor::EffectExecutor;
+pub(crate) use control_loop::{
+    ControlEffect, ControlLoop, ControlLoopExit, ControlMessage, ControlResult,
+};
+pub(crate) use effect_executor::{EffectExecutor, EffectLoopExit, run_effect_loop};

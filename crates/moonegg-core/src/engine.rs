@@ -7,29 +7,58 @@ use std::{
 };
 
 use crate::{
-    player::PlayerCommand,
-    runtime::{ControlLoop, ControlLoopExit, ControlMessage, ControlResult},
+    player::{PlayerCommand, PlayerEvent},
+    runtime::{
+        ControlLoop, ControlLoopExit, ControlMessage, ControlResult, EffectExecutor,
+        EffectLoopExit, run_effect_loop,
+    },
 };
 
 pub(crate) struct PlayerEngine {
     message_sender: Sender<ControlMessage>,
-    result_receiver: Receiver<ControlResult>,
+    event_receiver: Receiver<PlayerEvent>,
     control_thread: JoinHandle<ControlLoopExit>,
+    effect_thread: JoinHandle<EffectLoopExit>,
 }
 
 impl PlayerEngine {
-    pub(crate) fn new() -> io::Result<Self> {
+    pub(crate) fn new<E>(executor: E) -> io::Result<Self>
+    where
+        E: EffectExecutor + 'static,
+    {
         let (message_sender, message_receiver) = mpsc::channel::<ControlMessage>();
         let (result_sender, result_receiver) = mpsc::channel::<ControlResult>();
+        let (event_sender, event_receiver) = mpsc::channel::<PlayerEvent>();
 
         let control_thread = thread::Builder::new()
             .name("moonegg-control".to_owned())
             .spawn(move || ControlLoop::new().run(message_receiver, result_sender))?;
 
+        let feedback_sender = message_sender.clone();
+        let effect_thread_result = thread::Builder::new()
+            .name("moonegg-effect".to_owned())
+            .spawn(move || {
+                run_effect_loop(result_receiver, event_sender, feedback_sender, executor)
+            });
+
+        let effect_thread = match effect_thread_result {
+            Ok(thread) => thread,
+            Err(error) => {
+                // 为什么 drop(message_sender) 能让控制线程退出？
+                // 因为 EffectLoop 启动失败时，其闭包也会被销毁，闭包里的 feedback_sender 随之销毁。此时再销毁原始 message_sender：
+                // 所有 ControlMessage.Sender消失，message_recv()返回错误，ControlLoop 返回 InputDisconnected，join 完成
+                drop(message_sender);
+
+                let _ = control_thread.join();
+                return Err(error);
+            }
+        };
+
         Ok(Self {
             message_sender,
-            result_receiver,
+            event_receiver,
             control_thread,
+            effect_thread,
         })
     }
 
@@ -40,11 +69,7 @@ impl PlayerEngine {
         self.message_sender.send(ControlMessage::Command(command))
     }
 
-    pub(crate) fn message_sender(&self) -> Sender<ControlMessage> {
-        self.message_sender.clone()
-    }
-
-    pub(crate) fn recv_result(&self) -> Result<ControlResult, RecvError> {
-        self.result_receiver.recv()
+    pub(crate) fn recv_event(&self) -> Result<PlayerEvent, RecvError> {
+        self.event_receiver.recv()
     }
 }

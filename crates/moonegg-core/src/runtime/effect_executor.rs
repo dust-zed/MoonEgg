@@ -1,7 +1,4 @@
-use std::{
-    error, result,
-    sync::mpsc::{Receiver, Sender},
-};
+use std::sync::mpsc::{Receiver, Sender};
 
 use crate::{
     error::PlaybackError,
