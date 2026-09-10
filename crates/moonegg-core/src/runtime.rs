@@ -9,3 +9,4 @@ pub(crate) use control_loop::{
     ControlEffect, ControlLoop, ControlLoopExit, ControlMessage, ControlResult,
 };
 pub(crate) use effect_executor::{EffectExecutor, EffectLoopExit, run_effect_loop};
+pub(crate) use shutdown::{ShutdownReport, ThreadTermination};

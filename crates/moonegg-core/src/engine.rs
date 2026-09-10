@@ -10,7 +10,7 @@ use crate::{
     player::{PlayerCommand, PlayerEvent},
     runtime::{
         ControlLoop, ControlLoopExit, ControlMessage, ControlResult, EffectExecutor,
-        EffectLoopExit, run_effect_loop,
+        EffectLoopExit, ShutdownReport, ThreadTermination, run_effect_loop,
     },
 };
 
@@ -71,5 +71,35 @@ impl PlayerEngine {
 
     pub(crate) fn recv_event(&self) -> Result<PlayerEvent, RecvError> {
         self.event_receiver.recv()
+    }
+
+    pub(crate) fn shutdown(self) -> ShutdownReport {
+        let PlayerEngine {
+            message_sender,
+            event_receiver,
+            control_thread,
+            effect_thread,
+        } = self;
+
+        let release_sent = message_sender
+            .send(ControlMessage::Command(PlayerCommand::Release))
+            .is_ok();
+        let effect = match effect_thread.join() {
+            Ok(exit) => ThreadTermination::Exited(exit),
+            Err(_) => ThreadTermination::Paniced,
+        };
+
+        let control = match control_thread.join() {
+            Ok(exit) => ThreadTermination::Exited(exit),
+            Err(_) => ThreadTermination::Paniced,
+        };
+
+        drop(event_receiver);
+
+        ShutdownReport {
+            release_sent,
+            control,
+            effect,
+        }
     }
 }
