@@ -86,12 +86,12 @@ impl PlayerEngine {
             .is_ok();
         let effect = match effect_thread.join() {
             Ok(exit) => ThreadTermination::Exited(exit),
-            Err(_) => ThreadTermination::Paniced,
+            Err(_) => ThreadTermination::Panicked,
         };
 
         let control = match control_thread.join() {
             Ok(exit) => ThreadTermination::Exited(exit),
-            Err(_) => ThreadTermination::Paniced,
+            Err(_) => ThreadTermination::Panicked,
         };
 
         drop(event_receiver);

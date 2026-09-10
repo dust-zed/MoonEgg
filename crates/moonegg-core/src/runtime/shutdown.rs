@@ -3,7 +3,7 @@ use crate::runtime::{ControlLoopExit, EffectLoopExit};
 #[derive(Debug)]
 pub(crate) enum ThreadTermination<T> {
     Exited(T),
-    Paniced,
+    Panicked,
 }
 
 #[derive(Debug)]

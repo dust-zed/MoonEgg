@@ -2,6 +2,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use crate::{
     error::PlaybackError,
+    pipeline::PlaybackEpoch,
     player::PlayerEvent,
     runtime::{
         ControlMessage, ControlResult,
@@ -14,7 +15,7 @@ pub trait EffectExecutor: Send {
     fn execute(
         &mut self,
         effect: ControlEffect,
-        feedback: &Sender<ControlMessage>,
+        feedback: &EffectFeedback,
     ) -> Result<(), PlaybackError>;
 }
 
@@ -27,6 +28,38 @@ pub enum EffectLoopExit {
     ControlFailed(ControlError),
     TerminalEffectFailed(PlaybackError),
 }
+
+#[derive(Debug, Clone)]
+pub struct EffectFeedback {
+    epoch: PlaybackEpoch,
+    sender: Sender<ControlMessage>,
+}
+
+impl EffectFeedback {
+    fn new(epoch: PlaybackEpoch, sender: Sender<ControlMessage>) -> Self {
+        Self { epoch, sender }
+    }
+
+    fn prepation_completed(&self) -> Result<(), FeedbackDisconnected> {
+        self.send(WorkerEvent::PreparationCompleted { epoch: self.epoch })
+    }
+
+    fn failed(&self, error: PlaybackError) -> Result<(), FeedbackDisconnected> {
+        self.send(WorkerEvent::Failed {
+            epoch: self.epoch,
+            error,
+        })
+    }
+
+    fn send(&self, event: WorkerEvent) -> Result<(), FeedbackDisconnected> {
+        self.sender
+            .send(ControlMessage::WorkerEvent(event))
+            .map_err(|_| FeedbackDisconnected)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeedbackDisconnected;
 
 pub fn run_effect_loop<E>(
     result_receiver: Receiver<ControlResult>,
@@ -80,7 +113,9 @@ where
             let cleanup_after_failure =
                 matches!(&effect, ControlEffect::CleanupAfterFailure { .. });
 
-            match executor.execute(effect, &feedback_sender) {
+            let effect_feedback = EffectFeedback::new(epoch, feedback_sender.clone());
+
+            match executor.execute(effect, &effect_feedback) {
                 Ok(()) => {
                     if event_disconnected {
                         return EffectLoopExit::EventsDisconnected;
