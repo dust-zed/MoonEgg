@@ -253,6 +253,7 @@ impl ControlOutcome {
     }
 }
 
+#[derive(Debug)]
 pub enum ControlError {
     CommandRejected {
         command: PlayerCommand,

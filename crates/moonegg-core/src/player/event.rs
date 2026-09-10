@@ -1,4 +1,7 @@
-use crate::{error::PlaybackError, player::PlayerState};
+use crate::{
+    error::PlaybackError,
+    player::{PlayerCommand, PlayerState},
+};
 
 #[derive(Debug)]
 pub enum PlayerEvent {
@@ -8,5 +11,9 @@ pub enum PlayerEvent {
     },
     PlaybackFailed {
         error: PlaybackError,
+    },
+    CommandRejected {
+        command: PlayerCommand,
+        state: PlayerState,
     },
 }
