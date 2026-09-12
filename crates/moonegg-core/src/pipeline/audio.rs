@@ -259,4 +259,8 @@ where
 
         Ok(())
     }
+
+    pub const fn epoch(&self) -> PlaybackEpoch {
+        self.epoch
+    }
 }
