@@ -40,11 +40,11 @@ impl EffectFeedback {
         Self { epoch, sender }
     }
 
-    fn prepation_completed(&self) -> Result<(), FeedbackDisconnected> {
+    pub(super) fn preparation_completed(&self) -> Result<(), FeedbackDisconnected> {
         self.send(WorkerEvent::PreparationCompleted { epoch: self.epoch })
     }
 
-    fn failed(&self, error: PlaybackError) -> Result<(), FeedbackDisconnected> {
+    pub(super) fn failed(&self, error: PlaybackError) -> Result<(), FeedbackDisconnected> {
         self.send(WorkerEvent::Failed {
             epoch: self.epoch,
             error,
@@ -55,6 +55,10 @@ impl EffectFeedback {
         self.sender
             .send(ControlMessage::WorkerEvent(event))
             .map_err(|_| FeedbackDisconnected)
+    }
+
+    pub(super) const fn epoch(&self) -> PlaybackEpoch {
+        self.epoch
     }
 }
 
