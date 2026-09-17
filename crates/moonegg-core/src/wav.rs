@@ -1,6 +1,8 @@
+use std::ops::Range;
+
 use crate::{
-    media::{AudioCodecId, AudioTrackFormat},
-    ports::DemuxError,
+    media::{AudioCodecId, AudioTrackFormat, Packet, TimeBase, TimeSpan, Timestamp, TrackId},
+    ports::{DemuxError, ReadPacketResult},
 };
 
 fn parse_pcm_format(data: &[u8]) -> Result<AudioTrackFormat, DemuxError> {
@@ -53,7 +55,7 @@ fn parse_pcm_format(data: &[u8]) -> Result<AudioTrackFormat, DemuxError> {
     ))
 }
 
-fn parse_wav_format(data: &[u8]) -> Result<AudioTrackFormat, DemuxError> {
+fn parse_wav(data: &[u8]) -> Result<WavInfo, DemuxError> {
     if data.len() < 12 {
         return Err(DemuxError::InvalidData);
     }
@@ -74,6 +76,8 @@ fn parse_wav_format(data: &[u8]) -> Result<AudioTrackFormat, DemuxError> {
         return Err(DemuxError::InvalidData);
     }
 
+    let mut format = None;
+    let mut data_range = None;
     let mut cursor = 12;
 
     while cursor < riff_end {
@@ -104,11 +108,113 @@ fn parse_wav_format(data: &[u8]) -> Result<AudioTrackFormat, DemuxError> {
             return Err(DemuxError::InvalidData);
         }
 
-        if chunk_id == b"fmt " {
-            return parse_pcm_format(&data[payload_start..payload_end]);
+        match chunk_id {
+            b"fmt " => {
+                if format.is_some() {
+                    return Err(DemuxError::Unsupported);
+                }
+
+                format = Some(parse_pcm_format(&data[payload_start..payload_end])?);
+            }
+            b"data" => {
+                if data_range.is_some() {
+                    return Err(DemuxError::Unsupported);
+                }
+
+                data_range = Some(payload_start..payload_end)
+            }
+            _ => {}
         }
 
         cursor = payload_end + padding;
     }
-    Err(DemuxError::InvalidData)
+    let format = format.ok_or(DemuxError::InvalidData)?;
+    let data_range = data_range.ok_or(DemuxError::InvalidData)?;
+
+    let bytes_per_frame = usize::from(format.channel_count()) * 2;
+    let data_len = data_range.end - data_range.start;
+
+    if data_len % bytes_per_frame != 0 {
+        return Err(DemuxError::InvalidData);
+    }
+
+    Ok(WavInfo { format, data_range })
+}
+
+#[derive(Debug)]
+struct WavInfo {
+    format: AudioTrackFormat,
+    data_range: Range<usize>,
+}
+
+impl WavInfo {
+    fn frame_count(&self) -> usize {
+        let data_len = self.data_range.end - self.data_range.start;
+        let bytes_per_frame = usize::from(self.format.channel_count()) * 2;
+
+        data_len / bytes_per_frame
+    }
+
+    fn duration_seconds(&self) -> f64 {
+        self.frame_count() as f64 / f64::from(self.format.sample_rate())
+    }
+}
+
+pub(crate) struct WavDemuxer {
+    data: Vec<u8>,
+    info: WavInfo,
+    next_frame: usize,
+    time_base: TimeBase,
+}
+
+impl WavDemuxer {
+    pub(crate) fn from_bytes(data: Vec<u8>) -> Result<Self, DemuxError> {
+        let info = parse_wav(&data)?;
+
+        let time_base =
+            TimeBase::from_hz(info.format.sample_rate()).map_err(|_| DemuxError::InvalidData)?;
+
+        Ok(Self {
+            data,
+            info,
+            next_frame: 0,
+            time_base,
+        })
+    }
+
+    pub(crate) fn read_packet(&mut self) -> Result<ReadPacketResult, DemuxError> {
+        const FRAMES_PER_PACKET: usize = 1024;
+
+        let total_frames = self.info.frame_count();
+
+        if self.next_frame >= total_frames {
+            return Ok(ReadPacketResult::EndOfStream);
+        }
+
+        // 1. 决定本次读取多少个完整 frame。
+        let remaining_frames = total_frames - self.next_frame;
+        let frames_to_read = remaining_frames.min(FRAMES_PER_PACKET);
+
+        let bytes_per_frame = usize::from(self.info.format.channel_count()) * 2;
+        let bytes_start = self.info.data_range.start + self.next_frame * bytes_per_frame;
+        let bytes_end = bytes_start + frames_to_read * bytes_per_frame;
+
+        let start_stick = i64::try_from(self.next_frame).map_err(|_| DemuxError::InvalidData)?;
+        let duration_ticks = u64::try_from(frames_to_read).map_err(|_| DemuxError::InvalidData)?;
+
+        let timestamp = Timestamp::new(start_stick, self.time_base);
+
+        let packet = Packet::new(
+            TrackId::new(0),
+            self.data[bytes_start..bytes_end].to_vec(),
+            Some(timestamp),
+            Some(timestamp),
+            Some(TimeSpan::new(duration_ticks, self.time_base)),
+            true,
+        );
+
+        self.next_frame += frames_to_read;
+
+        Ok(ReadPacketResult::Packet(packet))
+    }
 }
