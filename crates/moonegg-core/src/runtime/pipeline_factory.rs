@@ -29,6 +29,8 @@ pub(crate) trait AudioPipelineFactory: Send + Sync + 'static {
         Self::check_canceled(cancel)?;
         let demuxer = self.open_demuxer(cancel)?;
 
+        Self::check_canceled(cancel)?;
+
         let track = demuxer
             .tracks()
             .iter()
