@@ -42,6 +42,7 @@ pub enum AudioOutputError {
     InvalidState,
     DeviceUnavailable,
     Platform,
+    BufferTooLarge,
 }
 
 pub trait AudioOutput {
