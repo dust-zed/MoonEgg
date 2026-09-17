@@ -1,8 +1,11 @@
 use std::ops::Range;
 
 use crate::{
-    media::{AudioCodecId, AudioTrackFormat, Packet, TimeBase, TimeSpan, Timestamp, TrackId},
-    ports::{DemuxError, ReadPacketResult},
+    media::{
+        AudioCodecId, AudioTrackFormat, MediaTime, Packet, Rounding, TimeBase, TimeSpan, Timestamp,
+        TrackFormat, TrackId, TrackInfo,
+    },
+    ports::{DemuxError, Demuxer, ReadPacketResult},
 };
 
 fn parse_pcm_format(data: &[u8]) -> Result<AudioTrackFormat, DemuxError> {
@@ -165,6 +168,8 @@ pub(crate) struct WavDemuxer {
     info: WavInfo,
     next_frame: usize,
     time_base: TimeBase,
+
+    tracks: [TrackInfo; 1],
 }
 
 impl WavDemuxer {
@@ -174,11 +179,24 @@ impl WavDemuxer {
         let time_base =
             TimeBase::from_hz(info.format.sample_rate()).map_err(|_| DemuxError::InvalidData)?;
 
+        let duration_ticks =
+            u64::try_from(info.frame_count()).map_err(|_| DemuxError::InvalidData)?;
+
+        let track = TrackInfo::new(
+            TrackId::new(0),
+            time_base,
+            Some(0),
+            Some(duration_ticks),
+            TrackFormat::Audio(info.format.clone()),
+        );
+
         Ok(Self {
             data,
             info,
             next_frame: 0,
             time_base,
+
+            tracks: [track],
         })
     }
 
@@ -216,5 +234,38 @@ impl WavDemuxer {
         self.next_frame += frames_to_read;
 
         Ok(ReadPacketResult::Packet(packet))
+    }
+}
+
+impl Demuxer for WavDemuxer {
+    fn read_packet(&mut self) -> Result<ReadPacketResult, DemuxError> {
+        WavDemuxer::read_packet(self)
+    }
+
+    fn seek(&mut self, target: MediaTime) -> Result<MediaTime, DemuxError> {
+        // 1. 负数目标按 0 处理。
+        let target_ns = target.nanoseconds().max(0);
+
+        let request_frame =
+            i128::from(target_ns) * i128::from(self.info.format.sample_rate()) / 1_000_000_000;
+
+        let total_frames =
+            i128::try_from(self.info.frame_count()).map_err(|_| DemuxError::InvalidData)?;
+
+        let frame = request_frame.min(total_frames);
+        let next_frame = usize::try_from(frame).map_err(|_| DemuxError::InvalidData)?;
+
+        // 计算实际落点对应的媒体时间
+        let ticks = i64::try_from(next_frame).map_err(|_| DemuxError::InvalidData)?;
+        let landed = Timestamp::new(ticks, self.time_base)
+            .to_media_time(Rounding::TowardZero)
+            .map_err(|_| DemuxError::InvalidData)?;
+
+        self.next_frame = next_frame;
+        Ok(landed)
+    }
+
+    fn tracks(&self) -> &[TrackInfo] {
+        &self.tracks
     }
 }
