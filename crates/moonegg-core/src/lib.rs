@@ -12,6 +12,7 @@ pub mod ports;
 mod runtime;
 mod timing;
 
+mod pcm;
 mod wav;
 
 #[must_use]
