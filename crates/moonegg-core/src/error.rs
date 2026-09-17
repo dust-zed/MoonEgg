@@ -26,4 +26,8 @@ pub enum RuntimeError {
         expected: PlaybackEpoch,
         actual: PlaybackEpoch,
     },
+
+    WorkerAlreadyExists,
+    WorkerNotPrepared,
+    Cancelled,
 }

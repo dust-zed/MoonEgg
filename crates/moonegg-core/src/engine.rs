@@ -9,8 +9,9 @@ use std::{
 use crate::{
     player::{PlayerCommand, PlayerEvent},
     runtime::{
-        ControlLoop, ControlLoopExit, ControlMessage, ControlResult, EffectExecutor,
-        EffectLoopExit, ShutdownReport, ThreadTermination, run_effect_loop,
+        AudioPipelineFactory, ControlLoop, ControlLoopExit, ControlMessage, ControlResult,
+        EffectExecutor, EffectLoopExit, PlaybackEffectExecutor, ShutdownReport, ThreadTermination,
+        run_effect_loop,
     },
 };
 
@@ -101,5 +102,12 @@ impl PlayerEngine {
             control,
             effect,
         }
+    }
+
+    pub(crate) fn new_auido<F>(factory: F) -> io::Result<Self>
+    where
+        F: AudioPipelineFactory,
+    {
+        Self::new(PlaybackEffectExecutor::new(factory))
     }
 }

@@ -27,6 +27,7 @@ pub enum PlaybackPipelineError {
 
     TrackNotFound,
     NotAudioTrack,
+    NoAudioTrack,
 
     EpochMismatch {
         expected: PlaybackEpoch,
