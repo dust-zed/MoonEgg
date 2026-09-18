@@ -38,12 +38,18 @@ impl PlayerState {
                 | Self::Ready
                 | Self::Playing
                 | Self::Paused
+                | Self::Ended
                 | Self::Error,
                 StateAction::Stop,
             ) => Ok(Self::Idle),
 
             (
-                Self::Idle | Self::Preparing | Self::Ready | Self::Playing | Self::Paused,
+                Self::Idle
+                | Self::Preparing
+                | Self::Ready
+                | Self::Playing
+                | Self::Paused
+                | Self::Ended,
                 StateAction::FatalError,
             ) => Ok(Self::Error),
 

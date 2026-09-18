@@ -87,6 +87,7 @@ where
                     .map_err(PlaybackError::Pipeline)?;
 
                 self.decoder_drained = false;
+                self.completion_reported = false;
 
                 if self.running {
                     pipeline.start().map_err(PlaybackError::Pipeline)?;
@@ -99,6 +100,7 @@ where
     fn close_pipeline(&mut self) {
         self.running = false;
         self.decoder_drained = false;
+        self.completion_reported = false;
 
         if let Some(mut pipeline) = self.pipeline.take() {
             let _ = pipeline.pause();

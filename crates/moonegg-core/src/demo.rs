@@ -6,6 +6,7 @@ use std::{
 
 use crate::{
     engine::PlayerEngine,
+    media::MediaTime,
     player::{PlayerCommand, PlayerEvent, PlayerState},
     runtime::{ControlLoopExit, EffectLoopExit, ThreadTermination, WavPlaybackFactory},
 };
@@ -43,10 +44,18 @@ pub fn run_wav_demo(path: PathBuf) -> Result<(), String> {
 fn drive_demo(engine: &PlayerEngine) -> Result<(), String> {
     let steps = [
         (PlayerCommand::Prepare, PlayerState::Ready, 0),
-        (PlayerCommand::Play, PlayerState::Playing, 2),
-        (PlayerCommand::Pause, PlayerState::Paused, 2),
-        (PlayerCommand::Play, PlayerState::Playing, 2),
+        // 第一遍：等到自然结束。
         (PlayerCommand::Play, PlayerState::Ended, 0),
+        // 定位回开头，保持暂停。
+        (
+            PlayerCommand::Seek(MediaTime::from_nanoseconds(0)),
+            PlayerState::Paused,
+            0,
+        ),
+        // 第二遍：再次等到自然结束。
+        (PlayerCommand::Play, PlayerState::Ended, 0),
+        // 释放当前播放会话，回到 Idle。
+        (PlayerCommand::Stop, PlayerState::Idle, 0),
     ];
 
     for (command, expected_state, observe_secs) in steps {
