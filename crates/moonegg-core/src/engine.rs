@@ -2,8 +2,10 @@
 //! 装配其他组件，提供播放引擎入口
 use std::{
     io,
-    sync::mpsc::{self, Receiver, RecvError, SendError, Sender},
+    path::PathBuf,
+    sync::mpsc::{self, Receiver, RecvError, RecvTimeoutError, SendError, Sender},
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use crate::{
@@ -11,7 +13,7 @@ use crate::{
     runtime::{
         AudioPipelineFactory, ControlLoop, ControlLoopExit, ControlMessage, ControlResult,
         EffectExecutor, EffectLoopExit, PlaybackEffectExecutor, ShutdownReport, ThreadTermination,
-        run_effect_loop,
+        WavPlaybackFactory, run_effect_loop,
     },
 };
 
@@ -104,10 +106,17 @@ impl PlayerEngine {
         }
     }
 
-    pub(crate) fn new_auido<F>(factory: F) -> io::Result<Self>
+    pub(crate) fn new_audio<F>(factory: F) -> io::Result<Self>
     where
         F: AudioPipelineFactory,
     {
         Self::new(PlaybackEffectExecutor::new(factory))
+    }
+
+    pub(crate) fn recv_event_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<PlayerEvent, RecvTimeoutError> {
+        self.event_receiver.recv_timeout(timeout)
     }
 }

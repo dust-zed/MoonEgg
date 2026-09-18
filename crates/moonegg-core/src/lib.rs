@@ -16,6 +16,10 @@ mod pcm;
 mod simulated_audio;
 mod wav;
 
+mod demo;
+
+pub use demo::run_wav_demo;
+
 #[must_use]
 pub const fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
