@@ -1,10 +1,11 @@
 use crate::{
-    media::{AudioBuffer, MediaTime, Packet, TrackFormat, TrackId},
+    media::{AudioBuffer, MediaTime, Packet, Rounding, TimeError, TrackFormat, TrackId},
     pipeline::{
         EpochItem, PlaybackEpoch,
         audio::{AudioEnqueueResult, AudioPipeline, AudioPipelineError, AudioStepResult},
     },
     ports::{AudioOutput, AudioPlaybackPosition, Decoder, DemuxError, Demuxer, ReadPacketResult},
+    timing::{AudioClock, ClockError, ClockSnapshot},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +25,8 @@ pub enum PlaybackStepResult {
 pub enum PlaybackPipelineError {
     Demux(DemuxError),
     Audio(AudioPipelineError),
+    Clock(ClockError),
+    Time(TimeError),
 
     TrackNotFound,
     NotAudioTrack,
@@ -53,6 +56,7 @@ pub struct PlaybackPipeline<X, D, O> {
 
     audio_track: TrackId,
     epoch: PlaybackEpoch,
+    clock: AudioClock,
 
     pending_packet: Option<EpochItem<Packet>>,
     source_phase: SourcePhase,
@@ -78,18 +82,36 @@ where
             .find(|track| track.id() == audio_track)
             .ok_or(PlaybackPipelineError::TrackNotFound)?;
 
-        if !matches!(track.format(), TrackFormat::Audio(_)) {
-            return Err(PlaybackPipelineError::NotAudioTrack);
-        }
+        let TrackFormat::Audio(format) = track.format() else {
+            return Err(PlaybackPipelineError::NoAudioTrack);
+        };
 
-        let audio = AudioPipeline::new(decoder, output, audio_track, epoch, packet_capacity)
+        let sample_rate = format.sample_rate();
+
+        let start_time = match track.start_time() {
+            Some(timestamp) => timestamp
+                .to_media_time(Rounding::TowardZero)
+                .map_err(PlaybackPipelineError::Time)?,
+
+            None => MediaTime::from_nanoseconds(0),
+        };
+
+        let mut audio = AudioPipeline::new(decoder, output, audio_track, epoch, packet_capacity)
             .map_err(PlaybackPipelineError::Audio)?;
+
+        let position = audio
+            .playback_position()
+            .map_err(PlaybackPipelineError::Audio)?;
+
+        let clock = AudioClock::new(sample_rate, start_time, position.played_frames())
+            .map_err(PlaybackPipelineError::Clock)?;
 
         Ok(Self {
             demuxer,
             audio,
             audio_track,
             epoch,
+            clock,
             pending_packet: None,
             source_phase: SourcePhase::Reading,
         })
@@ -219,6 +241,13 @@ where
             .seek(target)
             .map_err(PlaybackPipelineError::Demux)?;
 
+        let position = self
+            .audio
+            .playback_position()
+            .map_err(PlaybackPipelineError::Audio)?;
+
+        self.clock.reanchor(landed, position.played_frames());
+
         self.epoch = new_epoch;
         self.source_phase = SourcePhase::Reading;
 
@@ -227,6 +256,14 @@ where
             landed,
             epoch: new_epoch,
         })
+    }
+
+    pub fn clock_snapshot(&mut self) -> Result<ClockSnapshot, PlaybackPipelineError> {
+        let position = self.playback_position()?;
+
+        self.clock
+            .snapshot(position)
+            .map_err(PlaybackPipelineError::Clock)
     }
 
     pub fn playback_position(&mut self) -> Result<AudioPlaybackPosition, PlaybackPipelineError> {

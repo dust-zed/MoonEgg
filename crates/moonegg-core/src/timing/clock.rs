@@ -73,6 +73,11 @@ impl AudioClock {
             observed_at: position.observed_at(),
         })
     }
+
+    pub fn reanchor(&mut self, media_time: MediaTime, played_frames: u64) {
+        self.anchor_media = media_time;
+        self.anchor_played_frames = played_frames;
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
