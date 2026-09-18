@@ -46,6 +46,7 @@ fn drive_demo(engine: &PlayerEngine) -> Result<(), String> {
         (PlayerCommand::Play, PlayerState::Playing, 2),
         (PlayerCommand::Pause, PlayerState::Paused, 2),
         (PlayerCommand::Play, PlayerState::Playing, 2),
+        (PlayerCommand::Play, PlayerState::Ended, 0),
     ];
 
     for (command, expected_state, observe_secs) in steps {

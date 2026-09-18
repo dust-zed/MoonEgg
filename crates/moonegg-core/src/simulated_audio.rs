@@ -142,4 +142,10 @@ impl AudioOutput for SimulatedAudioOutput {
 
         Ok(AudioPlaybackPosition::new(self.played_frames, now))
     }
+
+    fn is_drained(&mut self) -> Result<bool, AudioOutputError> {
+        self.update(Instant::now())?;
+
+        Ok(self.buffered_frames == 0)
+    }
 }

@@ -234,4 +234,10 @@ where
             .playback_position()
             .map_err(PlaybackPipelineError::Audio)
     }
+
+    pub fn is_finished(&mut self) -> Result<bool, PlaybackPipelineError> {
+        self.audio
+            .is_finished()
+            .map_err(PlaybackPipelineError::Audio)
+    }
 }

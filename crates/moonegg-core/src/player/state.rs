@@ -6,6 +6,7 @@ pub enum PlayerState {
     Playing,
     Paused,
     Error,
+    Ended,
     Released,
 }
 
@@ -48,6 +49,10 @@ impl PlayerState {
 
             (Self::Error, StateAction::FatalError) => Ok(Self::Error),
 
+            (Self::Playing | Self::Paused, StateAction::PlaybackCompleted) => Ok(Self::Ended),
+
+            (Self::Ended, StateAction::Seek) => Ok(Self::Paused),
+
             _ => Err(InvalidTransition {
                 state: self,
                 action,
@@ -65,6 +70,7 @@ pub enum StateAction {
     Stop,
     Seek,
     Release,
+    PlaybackCompleted,
     FatalError,
 }
 

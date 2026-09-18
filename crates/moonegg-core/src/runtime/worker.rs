@@ -24,6 +24,9 @@ pub enum WorkerEvent {
         epoch: PlaybackEpoch,
         played_frames: u64,
     },
+    PlaybackCompleted {
+        epoch: PlaybackEpoch,
+    },
 }
 
 #[derive(Debug)]

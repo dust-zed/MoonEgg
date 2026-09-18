@@ -36,6 +36,7 @@ struct PlaybackWorker<X, D, O> {
 
     running: bool,
     decoder_drained: bool,
+    completion_reported: bool,
 }
 
 impl<X, D, O> PlaybackWorker<X, D, O>
@@ -61,6 +62,9 @@ where
                         expected: pipeline.epoch(),
                         actual: command_epoch,
                     }));
+                }
+                if self.completion_reported {
+                    return Ok(());
                 }
                 pipeline.start().map_err(PlaybackError::Pipeline)?;
                 self.running = true;
@@ -193,6 +197,23 @@ where
                 }
             }
 
+            match self.poll_completion() {
+                Ok(true) => {
+                    if self.feedback.playback_completed().is_err() {
+                        break;
+                    }
+                }
+                Ok(false) => {}
+
+                Err(error) => {
+                    if !self.report_failure(error) {
+                        break;
+                    }
+                    should_wait = true;
+                    continue;
+                }
+            }
+
             if !self.running || self.decoder_drained {
                 should_wait = true;
                 continue;
@@ -230,6 +251,28 @@ where
             }
         }
         self.close_pipeline();
+    }
+
+    fn poll_completion(&mut self) -> Result<bool, PlaybackError> {
+        if !self.running || !self.decoder_drained || self.completion_reported {
+            return Ok(false);
+        }
+
+        let pipeline = self
+            .pipeline
+            .as_mut()
+            .ok_or(PlaybackError::Runtime(RuntimeError::SessionFailed))?;
+
+        if !pipeline.is_finished().map_err(PlaybackError::Pipeline)? {
+            return Ok(false);
+        }
+
+        pipeline.pause().map_err(PlaybackError::Pipeline)?;
+
+        self.running = false;
+        self.completion_reported = true;
+
+        Ok(true)
     }
 }
 
@@ -313,6 +356,7 @@ where
                 feedback,
                 running: false,
                 decoder_drained: false,
+                completion_reported: false,
             };
 
             worker.run(preparation_error);

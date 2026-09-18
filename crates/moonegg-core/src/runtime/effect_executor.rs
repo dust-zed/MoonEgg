@@ -67,6 +67,10 @@ impl EffectFeedback {
             played_frames,
         })
     }
+
+    pub(super) fn playback_completed(&self) -> Result<(), FeedbackDisconnected> {
+        self.send(WorkerEvent::PlaybackCompleted { epoch: self.epoch })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

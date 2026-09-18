@@ -269,4 +269,12 @@ where
             .playback_position()
             .map_err(AudioPipelineError::Output)
     }
+
+    pub fn is_finished(&mut self) -> Result<bool, AudioPipelineError> {
+        if self.phase != AudioPhase::DecoderDrained {
+            return Ok(false);
+        }
+
+        self.output.is_drained().map_err(AudioPipelineError::Output)
+    }
 }

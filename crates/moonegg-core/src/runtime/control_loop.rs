@@ -201,6 +201,27 @@ impl ControlLoop {
                     event: Some(PlayerEvent::AudioProgress { played_frames }),
                 })
             }
+            WorkerEvent::PlaybackCompleted { epoch } => {
+                if epoch != self.epoch {
+                    return Ok(ControlOutcome::none());
+                }
+
+                let previous = self.state;
+
+                let next = previous
+                    .transition(StateAction::PlaybackCompleted)
+                    .map_err(|transition| ControlError::UnexpectedWorkEvent { transition })?;
+
+                self.state = next;
+
+                Ok(ControlOutcome {
+                    effect: None,
+                    event: Some(PlayerEvent::StateChanged {
+                        previous,
+                        current: next,
+                    }),
+                })
+            }
         }
     }
 }

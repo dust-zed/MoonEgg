@@ -58,4 +58,6 @@ pub trait AudioOutput {
     fn flush(&mut self) -> Result<(), AudioOutputError>;
 
     fn playback_position(&mut self) -> Result<AudioPlaybackPosition, AudioOutputError>;
+
+    fn is_drained(&mut self) -> Result<bool, AudioOutputError>;
 }
