@@ -20,6 +20,10 @@ pub enum WorkerEvent {
         epoch: PlaybackEpoch,
         error: PlaybackError,
     },
+    AudioProgress {
+        epoch: PlaybackEpoch,
+        played_frames: u64,
+    },
 }
 
 #[derive(Debug)]

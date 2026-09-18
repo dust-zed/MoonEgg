@@ -188,6 +188,19 @@ impl ControlLoop {
                     event: Some(PlayerEvent::PlaybackFailed { error }),
                 })
             }
+            WorkerEvent::AudioProgress {
+                epoch,
+                played_frames,
+            } => {
+                if epoch != self.epoch {
+                    return Ok(ControlOutcome::none());
+                }
+
+                Ok(ControlOutcome {
+                    effect: None,
+                    event: Some(PlayerEvent::AudioProgress { played_frames }),
+                })
+            }
         }
     }
 }

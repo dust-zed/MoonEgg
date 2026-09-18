@@ -4,7 +4,7 @@ use crate::{
         EpochItem, PlaybackEpoch,
         audio::{AudioEnqueueResult, AudioPipeline, AudioPipelineError, AudioStepResult},
     },
-    ports::{AudioOutput, Decoder, DemuxError, Demuxer, ReadPacketResult},
+    ports::{AudioOutput, AudioPlaybackPosition, Decoder, DemuxError, Demuxer, ReadPacketResult},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -227,5 +227,11 @@ where
             landed,
             epoch: new_epoch,
         })
+    }
+
+    pub fn playback_position(&mut self) -> Result<AudioPlaybackPosition, PlaybackPipelineError> {
+        self.audio
+            .playback_position()
+            .map_err(PlaybackPipelineError::Audio)
     }
 }

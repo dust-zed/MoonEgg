@@ -41,65 +41,69 @@ pub fn run_wav_demo(path: PathBuf) -> Result<(), String> {
 }
 
 fn drive_demo(engine: &PlayerEngine) -> Result<(), String> {
-    engine
-        .send_command(PlayerCommand::Prepare)
-        .map_err(|error| format!("发送 prepare 失败：{error}"))?;
-    //最多等待 10 秒进入 Playing
-    let mut deadline = Instant::now() + Duration::from_secs(10);
-    let mut play_sent = false;
-    let mut playing = false;
+    let steps = [
+        (PlayerCommand::Prepare, PlayerState::Ready, 0),
+        (PlayerCommand::Play, PlayerState::Playing, 2),
+        (PlayerCommand::Pause, PlayerState::Paused, 2),
+        (PlayerCommand::Play, PlayerState::Playing, 2),
+    ];
 
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
+    for (command, expected_state, observe_secs) in steps {
+        println!("发送命令： {command:?}");
 
-        if remaining.is_zero() {
-            return if playing {
-                return Ok(());
-            } else {
-                Err("等待进入 Playing 超时".to_owned())
+        engine
+            .send_command(command)
+            .map_err(|error| format!("发送 {command:?} 失败：{error:?}"))?;
+
+        //每一步先等待目标状态，最多等待 10 秒
+        let mut state_reached = false;
+        let mut deadline = Instant::now() + Duration::from_secs(10);
+
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+
+            if remaining.is_zero() {
+                if state_reached {
+                    break;
+                }
+                return Err(format!("等待进入 {expected_state:?} 超时"));
+            }
+
+            let event = match engine.recv_event_timeout(remaining) {
+                Ok(event) => event,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err("事件通道已断开".to_owned());
+                }
             };
-        }
 
-        let event = match engine.recv_event_timeout(remaining) {
-            Ok(event) => event,
+            println!("{event:?}");
 
-            Err(RecvTimeoutError::Timeout) => continue,
+            match event {
+                PlayerEvent::StateChanged { current, .. } => {
+                    if !state_reached && current == expected_state {
+                        state_reached = true;
 
-            Err(RecvTimeoutError::Disconnected) => return Err("事件通道已断开".to_owned()),
-        };
+                        // Ready 不需要停留，马上进入播放步骤。
+                        if observe_secs == 0 {
+                            break;
+                        }
 
-        println!("{event:?}");
+                        // 从等待状态切换为观察进度
+                        deadline = Instant::now() + Duration::from_secs(observe_secs);
+                    }
+                }
+                PlayerEvent::PlaybackFailed { error } => {
+                    return Err(format!("播放失败：{error:?}"));
+                }
 
-        match event {
-            PlayerEvent::StateChanged {
-                current: PlayerState::Ready,
-                ..
-            } if !play_sent => {
-                engine
-                    .send_command(PlayerCommand::Play)
-                    .map_err(|error| format!("发送 Play 失败：{error:?}"))?;
+                PlayerEvent::CommandRejected { command, state } => {
+                    return Err(format!("命令被拒绝：{command:?}, 当前状态： {state:?}"));
+                }
 
-                play_sent = true;
+                _ => {}
             }
-
-            PlayerEvent::StateChanged {
-                current: PlayerState::Playing,
-                ..
-            } if !playing => {
-                playing = true;
-
-                deadline = Instant::now() + Duration::from_secs(5);
-            }
-
-            PlayerEvent::PlaybackFailed { error } => {
-                return Err(format!("播放失败： {error:?}"));
-            }
-
-            PlayerEvent::CommandRejected { command, state } => {
-                return Err(format!("命令被拒绝: {command:?}, 当前状态： {state:?}"));
-            }
-
-            _ => {}
         }
     }
+    Ok(())
 }

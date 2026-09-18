@@ -60,6 +60,13 @@ impl EffectFeedback {
     pub(super) const fn epoch(&self) -> PlaybackEpoch {
         self.epoch
     }
+
+    pub(super) fn audio_progress(&self, played_frames: u64) -> Result<(), FeedbackDisconnected> {
+        self.send(WorkerEvent::AudioProgress {
+            epoch: self.epoch,
+            played_frames,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

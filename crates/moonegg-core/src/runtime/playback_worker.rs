@@ -1,7 +1,7 @@
 use std::{
     sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -110,6 +110,9 @@ where
 
     fn run(mut self, preparation_error: Option<PlaybackError>) {
         const RETRY_INTERVAL: Duration = Duration::from_millis(10);
+        const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
+
+        let mut last_progress_report = Instant::now();
 
         if self.cancel.is_canceled() {
             self.close_pipeline();
@@ -152,6 +155,8 @@ where
                 break;
             }
 
+            let now = Instant::now();
+
             if let Some(command) = command {
                 if let Err(error) = self.apply_command(command) {
                     if !self.report_failure(error) {
@@ -159,6 +164,32 @@ where
                     }
                     should_wait = true;
                     continue;
+                }
+            }
+
+            if now.duration_since(last_progress_report) >= PROGRESS_INTERVAL {
+                last_progress_report = now;
+
+                if let Some(pipeline) = self.pipeline.as_mut() {
+                    let position = match pipeline.playback_position() {
+                        Ok(position) => position,
+
+                        Err(error) => {
+                            if !self.report_failure(PlaybackError::Pipeline(error)) {
+                                break;
+                            }
+                            should_wait = true;
+                            continue;
+                        }
+                    };
+
+                    if self
+                        .feedback
+                        .audio_progress(position.played_frames())
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
             }
 

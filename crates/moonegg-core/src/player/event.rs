@@ -12,6 +12,9 @@ pub enum PlayerEvent {
     PlaybackFailed {
         error: PlaybackError,
     },
+    AudioProgress {
+        played_frames: u64,
+    },
     CommandRejected {
         command: PlayerCommand,
         state: PlayerState,

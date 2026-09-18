@@ -2,8 +2,8 @@ use crate::{
     media::{AudioBuffer, DecodedFrame, Packet, TrackId},
     pipeline::{BoundedQueue, EpochItem, PlaybackEpoch, QueueError, QueuePushResult},
     ports::{
-        AudioOutput, AudioOutputError, AudioSubmitResult, DecodeError, DecodeInput, Decoder,
-        ReceiveResult, SubmitResult,
+        AudioOutput, AudioOutputError, AudioPlaybackPosition, AudioSubmitResult, DecodeError,
+        DecodeInput, Decoder, ReceiveResult, SubmitResult,
     },
 };
 
@@ -262,5 +262,11 @@ where
 
     pub const fn epoch(&self) -> PlaybackEpoch {
         self.epoch
+    }
+
+    pub fn playback_position(&mut self) -> Result<AudioPlaybackPosition, AudioPipelineError> {
+        self.output
+            .playback_position()
+            .map_err(AudioPipelineError::Output)
     }
 }
