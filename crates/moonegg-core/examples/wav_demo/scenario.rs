@@ -4,34 +4,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{
-    backends::WavPlaybackFactory,
-    engine::PlayerEngine,
-    media::MediaTime,
-    player::{PlayerCommand, PlayerEvent, PlayerState},
-    runtime::{ControlLoopExit, EffectLoopExit, ThreadTermination},
-};
+use moonegg_core::{PlayerCommand, PlayerEngine, PlayerEvent, PlayerState, media::MediaTime};
 
 pub fn run_wav_demo(path: PathBuf) -> Result<(), String> {
-    let factory = WavPlaybackFactory::new(path);
-
     let engine =
-        PlayerEngine::new_audio(factory).map_err(|error| format!("创建引擎失败：{error}"))?;
+        PlayerEngine::new_wav_simulated(path).map_err(|error| format!("创建引擎失败：{error}"))?;
 
     let result = drive_demo(&engine);
 
     let report = engine.shutdown();
     println!("关闭结果： {report:?}");
 
-    let shutdown_ok = report.release_sent
-        && matches!(
-            report.control,
-            ThreadTermination::Exited(ControlLoopExit::Released)
-        )
-        && matches!(
-            report.effect,
-            ThreadTermination::Exited(EffectLoopExit::Released)
-        );
+    let shutdown_ok = report.is_clean();
 
     result?;
 

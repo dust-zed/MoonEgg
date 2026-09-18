@@ -18,7 +18,7 @@ use crate::{
     },
 };
 
-pub(crate) struct PlayerEngine {
+pub struct PlayerEngine {
     message_sender: Sender<ControlMessage>,
     event_receiver: Receiver<PlayerEvent>,
     control_thread: JoinHandle<ControlLoopExit>,
@@ -70,10 +70,7 @@ impl PlayerEngine {
         Self::new_audio(WavPlaybackFactory::new(path))
     }
 
-    pub(crate) fn send_command(
-        &self,
-        command: PlayerCommand,
-    ) -> Result<(), SendError<ControlMessage>> {
+    pub fn send_command(&self, command: PlayerCommand) -> Result<(), SendError<ControlMessage>> {
         self.message_sender.send(ControlMessage::Command(command))
     }
 
@@ -81,7 +78,7 @@ impl PlayerEngine {
         self.event_receiver.recv()
     }
 
-    pub(crate) fn shutdown(self) -> ShutdownReport {
+    pub fn shutdown(self) -> ShutdownReport {
         let PlayerEngine {
             message_sender,
             event_receiver,
@@ -118,10 +115,7 @@ impl PlayerEngine {
         Self::new(PlaybackEffectExecutor::new(factory))
     }
 
-    pub(crate) fn recv_event_timeout(
-        &self,
-        timeout: Duration,
-    ) -> Result<PlayerEvent, RecvTimeoutError> {
+    pub fn recv_event_timeout(&self, timeout: Duration) -> Result<PlayerEvent, RecvTimeoutError> {
         self.event_receiver.recv_timeout(timeout)
     }
 }

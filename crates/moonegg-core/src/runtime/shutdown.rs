@@ -7,8 +7,22 @@ pub(crate) enum ThreadTermination<T> {
 }
 
 #[derive(Debug)]
-pub(crate) struct ShutdownReport {
+pub struct ShutdownReport {
     pub(crate) release_sent: bool,
     pub(crate) control: ThreadTermination<ControlLoopExit>,
     pub(crate) effect: ThreadTermination<EffectLoopExit>,
+}
+
+impl ShutdownReport {
+    pub fn is_clean(&self) -> bool {
+        self.release_sent
+            && matches!(
+                &self.control,
+                ThreadTermination::Exited(ControlLoopExit::Released)
+            )
+            && matches!(
+                &self.effect,
+                ThreadTermination::Exited(EffectLoopExit::Released)
+            )
+    }
 }

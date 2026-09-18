@@ -14,5 +14,6 @@ pub(crate) use control_loop::{
 pub(crate) use effect_executor::{EffectExecutor, EffectLoopExit, run_effect_loop};
 pub(crate) use pipeline_factory::AudioPipelineFactory;
 pub(crate) use playback_executor::PlaybackEffectExecutor;
-pub(crate) use shutdown::{ShutdownReport, ThreadTermination};
+pub use shutdown::ShutdownReport;
+pub(crate) use shutdown::ThreadTermination;
 pub(crate) use worker::CancellationToken;

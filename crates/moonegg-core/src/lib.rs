@@ -14,9 +14,9 @@ mod timing;
 
 mod backends;
 
-mod demo;
-
-pub use demo::run_wav_demo;
+pub use engine::PlayerEngine;
+pub use player::{PlayerCommand, PlayerEvent, PlayerState};
+pub use runtime::ShutdownReport;
 
 #[must_use]
 pub const fn version() -> &'static str {
