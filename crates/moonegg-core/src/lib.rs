@@ -12,9 +12,7 @@ pub mod ports;
 mod runtime;
 mod timing;
 
-mod pcm;
-mod simulated_audio;
-mod wav;
+mod backends;
 
 mod demo;
 

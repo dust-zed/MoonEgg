@@ -5,10 +5,11 @@ use std::{
 };
 
 use crate::{
+    backends::WavPlaybackFactory,
     engine::PlayerEngine,
     media::MediaTime,
     player::{PlayerCommand, PlayerEvent, PlayerState},
-    runtime::{ControlLoopExit, EffectLoopExit, ThreadTermination, WavPlaybackFactory},
+    runtime::{ControlLoopExit, EffectLoopExit, ThreadTermination},
 };
 
 pub fn run_wav_demo(path: PathBuf) -> Result<(), String> {

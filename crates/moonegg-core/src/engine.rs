@@ -9,11 +9,12 @@ use std::{
 };
 
 use crate::{
+    backends::WavPlaybackFactory,
     player::{PlayerCommand, PlayerEvent},
     runtime::{
         AudioPipelineFactory, ControlLoop, ControlLoopExit, ControlMessage, ControlResult,
         EffectExecutor, EffectLoopExit, PlaybackEffectExecutor, ShutdownReport, ThreadTermination,
-        WavPlaybackFactory, run_effect_loop,
+        run_effect_loop,
     },
 };
 
@@ -63,6 +64,10 @@ impl PlayerEngine {
             control_thread,
             effect_thread,
         })
+    }
+
+    pub fn new_wav_simulated(path: PathBuf) -> io::Result<Self> {
+        Self::new_audio(WavPlaybackFactory::new(path))
     }
 
     pub(crate) fn send_command(
