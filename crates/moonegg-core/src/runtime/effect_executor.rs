@@ -2,6 +2,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use crate::{
     error::PlaybackError,
+    media::MediaTime,
     pipeline::PlaybackEpoch,
     player::PlayerEvent,
     runtime::{
@@ -61,10 +62,10 @@ impl EffectFeedback {
         self.epoch
     }
 
-    pub(super) fn audio_progress(&self, played_frames: u64) -> Result<(), FeedbackDisconnected> {
+    pub(super) fn audio_progress(&self, media_time: MediaTime) -> Result<(), FeedbackDisconnected> {
         self.send(WorkerEvent::AudioProgress {
             epoch: self.epoch,
-            played_frames,
+            media_time,
         })
     }
 

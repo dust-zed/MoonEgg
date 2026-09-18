@@ -48,9 +48,9 @@ fn drive_demo(engine: &PlayerEngine) -> Result<(), String> {
         (PlayerCommand::Play, PlayerState::Ended, 0),
         // 定位回开头，保持暂停。
         (
-            PlayerCommand::Seek(MediaTime::from_nanoseconds(0)),
+            PlayerCommand::Seek(MediaTime::from_nanoseconds(3_000_000_000)),
             PlayerState::Paused,
-            0,
+            2,
         ),
         // 第二遍：再次等到自然结束。
         (PlayerCommand::Play, PlayerState::Ended, 0),
@@ -87,7 +87,13 @@ fn drive_demo(engine: &PlayerEngine) -> Result<(), String> {
                 }
             };
 
-            println!("{event:?}");
+            match &event {
+                PlayerEvent::AudioProgress { media_time } => {
+                    let seconds = media_time.nanoseconds() as f64 / 1_000_000_000.0;
+                    println!("播放位置： {seconds:.3} 秒");
+                }
+                _ => println!("{event:?}"),
+            }
 
             match event {
                 PlayerEvent::StateChanged { current, .. } => {

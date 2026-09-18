@@ -1,5 +1,7 @@
 use crate::{
     error::PlaybackError,
+    media::MediaTime,
+    pipeline::PlaybackEpoch,
     player::{PlayerCommand, PlayerState},
 };
 
@@ -13,7 +15,7 @@ pub enum PlayerEvent {
         error: PlaybackError,
     },
     AudioProgress {
-        played_frames: u64,
+        media_time: MediaTime,
     },
     CommandRejected {
         command: PlayerCommand,

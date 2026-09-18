@@ -177,8 +177,8 @@ where
                 last_progress_report = now;
 
                 if let Some(pipeline) = self.pipeline.as_mut() {
-                    let position = match pipeline.playback_position() {
-                        Ok(position) => position,
+                    let snapshot = match pipeline.clock_snapshot() {
+                        Ok(snapshot) => snapshot,
 
                         Err(error) => {
                             if !self.report_failure(PlaybackError::Pipeline(error)) {
@@ -189,11 +189,7 @@ where
                         }
                     };
 
-                    if self
-                        .feedback
-                        .audio_progress(position.played_frames())
-                        .is_err()
-                    {
+                    if self.feedback.audio_progress(snapshot.media_time()).is_err() {
                         break;
                     }
                 }

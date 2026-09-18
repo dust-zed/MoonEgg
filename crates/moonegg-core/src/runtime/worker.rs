@@ -8,6 +8,7 @@ use std::{
 
 use crate::{
     error::{self, PlaybackError},
+    media::MediaTime,
     pipeline::PlaybackEpoch,
 };
 
@@ -22,7 +23,7 @@ pub enum WorkerEvent {
     },
     AudioProgress {
         epoch: PlaybackEpoch,
-        played_frames: u64,
+        media_time: MediaTime,
     },
     PlaybackCompleted {
         epoch: PlaybackEpoch,
