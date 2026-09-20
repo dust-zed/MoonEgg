@@ -10,3 +10,4 @@ crate-type = ["cdylib"]
 [dependencies]
 moonegg-core = {path = "../moonegg-core"}
 uniffi = "0.32"
+thiserror = { workspace = true }
