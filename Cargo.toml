@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/moonegg-core"]
+members = ["crates/moonegg-core", "crates/moonegg-ffi", "tools/uniffi-bindgen"]
 
 [workspace.package]
 edition = "2024"

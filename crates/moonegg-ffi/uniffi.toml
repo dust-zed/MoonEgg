@@ -1,0 +1,4 @@
+[bindings.kotlin]
+package_name = "io.github.dustzed.moonegg.bindings"
+cdylib_name = "moonegg_ffi"
+android = true
