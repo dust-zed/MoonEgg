@@ -300,6 +300,7 @@ name = "moonegg-ffi"
 version = "0.1.0"
 dependencies = [
  "moonegg-core",
+ "thiserror",
  "uniffi",
 ]
 

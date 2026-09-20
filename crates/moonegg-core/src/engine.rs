@@ -3,7 +3,7 @@
 use std::{
     io,
     path::PathBuf,
-    sync::mpsc::{self, Receiver, RecvError, RecvTimeoutError, SendError, Sender},
+    sync::mpsc::{self, Receiver, RecvError, RecvTimeoutError, SendError, Sender, TryRecvError},
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -76,6 +76,10 @@ impl PlayerEngine {
 
     pub(crate) fn recv_event(&self) -> Result<PlayerEvent, RecvError> {
         self.event_receiver.recv()
+    }
+
+    pub fn try_recv_event(&self) -> Result<PlayerEvent, TryRecvError> {
+        self.event_receiver.try_recv()
     }
 
     pub fn shutdown(self) -> ShutdownReport {
