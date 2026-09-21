@@ -5,7 +5,7 @@ use std::{
 
 use moonegg_core::{PlayerCommand, PlayerEngine};
 
-use crate::event::{self, NativeEvent};
+use crate::event::NativeEvent;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum PlayerBridgeError {
