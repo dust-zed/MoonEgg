@@ -32,11 +32,18 @@ pub struct NativePlayer {
 impl NativePlayer {
     #[uniffi::constructor]
     pub fn new(path: String) -> Result<Arc<Self>, PlayerBridgeError> {
-        let engine = PlayerEngine::new_wav_simulated(PathBuf::from(path)).map_err(|err| {
-            PlayerBridgeError::CreatedFailed {
-                reason: err.to_string(),
-            }
+        let path = PathBuf::from(path);
+
+        #[cfg(target_os = "android")]
+        let result = PlayerEngine::new_wav(path, moonegg_android::AndroidAudioOutputFactory);
+
+        #[cfg(not(target_os = "android"))]
+        let result = PlayerEngine::new_wav_simulated(path);
+
+        let engine = result.map_err(|error| PlayerBridgeError::CreatedFailed {
+            reason: error.to_string(),
         })?;
+
         Ok(Arc::new(Self {
             engine: Mutex::new(Some(engine)),
         }))
