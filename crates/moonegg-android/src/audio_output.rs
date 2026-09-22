@@ -191,6 +191,8 @@ fn map_error(error: AAudioError) -> AudioOutputError {
             AudioError::Disconnected | AudioError::Unavailable | AudioError::NoService,
         ) => AudioOutputError::DeviceUnavailable,
 
-        _ => AudioOutputError::Platform,
+        other => AudioOutputError::Platform {
+            reason: format!("{other:?}"),
+        },
     }
 }

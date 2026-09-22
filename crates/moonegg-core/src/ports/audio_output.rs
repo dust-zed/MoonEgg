@@ -41,7 +41,7 @@ pub enum AudioOutputError {
     InvalidFormat,
     InvalidState,
     DeviceUnavailable,
-    Platform,
+    Platform { reason: String },
     BufferTooLarge,
 }
 
