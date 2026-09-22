@@ -2,7 +2,10 @@ use std::time::Instant;
 
 use crate::{
     media::{AudioBuffer, AudioSamples, DecodedFrame},
-    ports::{AudioOutput, AudioOutputError, AudioPlaybackPosition, AudioSubmitResult},
+    ports::{
+        AudioOutput, AudioOutputError, AudioOutputFactory, AudioPlaybackPosition, AudioSubmitResult,
+    },
+    runtime::AudioPipelineFactory,
 };
 
 pub(crate) struct SimulatedAudioOutput {
@@ -147,5 +150,29 @@ impl AudioOutput for SimulatedAudioOutput {
         self.update(Instant::now())?;
 
         Ok(self.buffered_frames == 0)
+    }
+}
+
+pub(crate) struct SimulatedAudioOutputFactory {
+    capacity_frames: u64,
+}
+
+impl SimulatedAudioOutputFactory {
+    pub(crate) const fn new(capacity_frames: u64) -> Self {
+        Self { capacity_frames }
+    }
+}
+
+impl AudioOutputFactory for SimulatedAudioOutputFactory {
+    type Output = SimulatedAudioOutput;
+    fn create(
+        &self,
+        format: &crate::media::AudioTrackFormat,
+    ) -> Result<Self::Output, AudioOutputError> {
+        SimulatedAudioOutput::new(
+            format.sample_rate(),
+            format.channel_count(),
+            self.capacity_frames,
+        )
     }
 }

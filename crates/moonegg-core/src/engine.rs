@@ -9,8 +9,9 @@ use std::{
 };
 
 use crate::{
-    backends::WavPlaybackFactory,
+    backends::{SimulatedAudioOutputFactory, WavPlaybackFactory},
     player::{PlayerCommand, PlayerEvent},
+    ports::AudioOutputFactory,
     runtime::{
         AudioPipelineFactory, ControlLoop, ControlLoopExit, ControlMessage, ControlResult,
         EffectExecutor, EffectLoopExit, PlaybackEffectExecutor, ShutdownReport, ThreadTermination,
@@ -66,8 +67,15 @@ impl PlayerEngine {
         })
     }
 
+    pub fn new_wav<F>(path: PathBuf, output_factoty: F) -> io::Result<Self>
+    where
+        F: AudioOutputFactory,
+    {
+        Self::new_audio(WavPlaybackFactory::new(path, output_factoty))
+    }
+
     pub fn new_wav_simulated(path: PathBuf) -> io::Result<Self> {
-        Self::new_audio(WavPlaybackFactory::new(path))
+        Self::new_wav(path, SimulatedAudioOutputFactory::new(4096))
     }
 
     pub fn send_command(&self, command: PlayerCommand) -> Result<(), SendError<ControlMessage>> {
