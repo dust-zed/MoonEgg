@@ -5,24 +5,31 @@ use crate::{
     error::PlaybackError,
     media::TrackFormat,
     pipeline::PlaybackPipelineError,
-    ports::DemuxError,
+    ports::{AudioOutputFactory, DemuxError},
     runtime::{AudioPipelineFactory, CancellationToken},
 };
 
-pub(crate) struct WavPlaybackFactory {
+pub(crate) struct WavPlaybackFactory<F> {
     path: PathBuf,
+    output_factory: F,
 }
 
-impl WavPlaybackFactory {
-    pub(crate) fn new(path: PathBuf) -> Self {
-        Self { path }
+impl<F> WavPlaybackFactory<F> {
+    pub(crate) fn new(path: PathBuf, output_factory: F) -> Self {
+        Self {
+            path,
+            output_factory,
+        }
     }
 }
 
-impl AudioPipelineFactory for WavPlaybackFactory {
+impl<F> AudioPipelineFactory for WavPlaybackFactory<F>
+where
+    F: AudioOutputFactory,
+{
     type Demux = WavDemuxer;
     type Decode = PcmDecoder;
-    type Output = SimulatedAudioOutput;
+    type Output = F::Output;
 
     fn open_demuxer(&self, cancel: &CancellationToken) -> Result<Self::Demux, PlaybackError> {
         Self::check_canceled(cancel)?;
@@ -48,8 +55,11 @@ impl AudioPipelineFactory for WavPlaybackFactory {
         let decoder = PcmDecoder::new(track.id(), format.clone()).map_err(PlaybackError::Decode)?;
         Self::check_canceled(cancel)?;
 
-        let output = SimulatedAudioOutput::new(format.sample_rate(), format.channel_count(), 4096)
+        let output = self
+            .output_factory
+            .create(format)
             .map_err(PlaybackError::AudioOutput)?;
+        Self::check_canceled(cancel)?;
 
         Ok((decoder, output))
     }
