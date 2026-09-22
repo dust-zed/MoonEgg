@@ -1,5 +1,8 @@
+use std::time::{Duration, Instant};
+
 use ndk::audio::{
     AudioDirection, AudioError, AudioFormat, AudioSharingMode, AudioStream, AudioStreamBuilder,
+    AudioStreamState,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -23,6 +26,8 @@ pub(crate) enum AAudioError {
     BufferTooLarge,
     #[error("AAudio 返回的写入帧数超出请求范围")]
     InvalidWriteCount,
+    #[error("当前音频流状态不允许此操作")]
+    InvalidState,
     #[error("AAudio 调用失败: {0:?}")]
     Native(AudioError),
 }
@@ -113,5 +118,99 @@ impl AAudioPcmStream {
         }
 
         Ok(written)
+    }
+
+    fn current_state(&self) -> Result<AudioStreamState, AAudioError> {
+        let state = self
+            .stream
+            .wait_for_state_change(AudioStreamState::Unknown, 0)
+            .map_err(AAudioError::Native)?;
+
+        if state == AudioStreamState::Disconnected {
+            return Err(AAudioError::Native(AudioError::Disconnected));
+        }
+
+        Ok(state)
+    }
+
+    fn wait_until(&self, expected: AudioStreamState) -> Result<(), AAudioError> {
+        let deadline = Instant::now() + Duration::from_millis(500);
+
+        loop {
+            let state = self.current_state()?;
+
+            if state == expected {
+                return Ok(());
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+
+            if remaining.is_zero() {
+                return Err(AAudioError::Native(AudioError::Timeout));
+            }
+
+            let wait = remaining.min(Duration::from_millis(20));
+
+            match self
+                .stream
+                .wait_for_state_change(state, wait.as_nanos() as i64)
+            {
+                Ok(_) | Err(AudioError::Timeout) => {}
+                Err(error) => return Err(AAudioError::Native(error)),
+            }
+        }
+    }
+
+    pub(crate) fn start(&mut self) -> Result<(), AAudioError> {
+        use AudioStreamState::*;
+
+        match self.current_state()? {
+            Started => return Ok(()),
+            Starting => {}
+            Open | Paused | Flushed | Stopped => {
+                self.stream.request_start().map_err(AAudioError::Native)?;
+            }
+            _ => return Err(AAudioError::InvalidState),
+        }
+        self.wait_until(Started)
+    }
+
+    pub(crate) fn pause(&mut self) -> Result<(), AAudioError> {
+        use AudioStreamState::*;
+
+        match self.current_state()? {
+            Open | Paused | Flushed | Stopped => return Ok(()),
+            Pausing => {}
+            Started | Starting => {
+                self.stream.request_pause().map_err(AAudioError::Native)?;
+            }
+            _ => return Err(AAudioError::InvalidState),
+        }
+        self.wait_until(Paused)
+    }
+
+    pub(crate) fn flush(&mut self) -> Result<(), AAudioError> {
+        self.pause()?;
+
+        match self.current_state()? {
+            AudioStreamState::Open | AudioStreamState::Flushed => Ok(()),
+            AudioStreamState::Paused => {
+                self.stream.request_flush().map_err(AAudioError::Native)?;
+                self.wait_until(AudioStreamState::Flushed)
+            }
+            _ => Err(AAudioError::InvalidState),
+        }
+    }
+
+    pub(crate) fn frame_counters(&self) -> Result<(u64, u64), AAudioError> {
+        self.current_state()?;
+
+        let consumed =
+            u64::try_from(self.stream.frames_read()).map_err(|_| AAudioError::InvalidState)?;
+
+        let written =
+            u64::try_from(self.stream.frames_written()).map_err(|_| AAudioError::InvalidState)?;
+
+        Ok((consumed, written))
     }
 }
