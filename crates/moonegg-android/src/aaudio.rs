@@ -175,18 +175,16 @@ impl AAudioPcmStream {
         }
     }
 
-    pub(crate) fn start(&mut self) -> Result<(), AAudioError> {
+    pub(crate) fn request_start(&mut self) -> Result<(), AAudioError> {
         use AudioStreamState::*;
 
         match self.current_state()? {
-            Started => return Ok(()),
-            Starting => {}
+            Started | Starting => return Ok(()),
             Open | Paused | Flushed | Stopped => {
-                self.stream.request_start().map_err(AAudioError::Native)?;
+                self.stream.request_start().map_err(AAudioError::Native)
             }
             _ => return Err(AAudioError::InvalidState),
         }
-        self.wait_until(Started)
     }
 
     pub(crate) fn pause(&mut self) -> Result<(), AAudioError> {

@@ -34,7 +34,7 @@ pub struct AndroidAudioOutput {
     pending: Option<PendingPcm>,
 
     running: bool,
-    started: bool,
+    request_started: bool,
 }
 
 impl AndroidAudioOutput {
@@ -49,7 +49,7 @@ impl AndroidAudioOutput {
             stream,
             pending: None,
             running: false,
-            started: false,
+            request_started: false,
         })
     }
 
@@ -99,11 +99,11 @@ impl AndroidAudioOutput {
             }
         }
 
-        if !self.started {
+        if !self.request_started {
             let (consumed, written) = self.stream.frame_counters().map_err(map_error)?;
             if had_pending || written > consumed {
-                self.stream.start().map_err(map_error)?;
-                self.started = true;
+                self.stream.request_start().map_err(map_error)?;
+                self.request_started = true;
             }
         }
         Ok(())
@@ -145,7 +145,7 @@ impl AudioOutput for AndroidAudioOutput {
     fn pause(&mut self) -> Result<(), AudioOutputError> {
         self.running = false;
         self.stream.pause().map_err(map_error)?;
-        self.started = false;
+        self.request_started = false;
 
         Ok(())
     }
