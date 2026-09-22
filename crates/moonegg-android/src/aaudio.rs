@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    result,
+    time::{Duration, Instant},
+};
 
 use ndk::audio::{
     AudioDirection, AudioError, AudioFormat, AudioSharingMode, AudioStream, AudioStreamBuilder,
@@ -105,11 +108,22 @@ impl AAudioPcmStream {
         let requested_frames =
             i32::try_from(frame_count).map_err(|_| AAudioError::BufferTooLarge)?;
 
-        let written = unsafe {
+        let result = unsafe {
             self.stream
                 .write(samples.as_ptr().cast(), requested_frames, 0)
-        }
-        .map_err(AAudioError::Native)?;
+        };
+
+        let written = match result {
+            // 当前 ndk 版本内部错误，这版本走不到 Ok
+            Ok(frames) => frames,
+            Err(error) => {
+                let code: i32 = error.into();
+                if code <= 0 {
+                    return Err(AAudioError::Native(error));
+                }
+                code as u32
+            }
+        };
 
         let written = usize::try_from(written).map_err(|_| AAudioError::InvalidWriteCount)?;
 
