@@ -45,7 +45,7 @@ pub enum PlaybackPipelineError {
 
 #[derive(Debug, Clone, Copy)]
 pub struct SeekOutcome {
-    pub requesteed: MediaTime,
+    pub requested: MediaTime,
     pub landed: MediaTime,
     pub epoch: PlaybackEpoch,
 }
@@ -263,7 +263,7 @@ where
         self.source_phase = SourcePhase::Reading;
 
         Ok(SeekOutcome {
-            requesteed: target,
+            requested: target,
             landed,
             epoch: new_epoch,
         })

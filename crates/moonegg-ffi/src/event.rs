@@ -33,6 +33,10 @@ pub enum NativeEvent {
         previous: NativeState,
         current: NativeState,
     },
+    SeekCompleted {
+        requested_ms: i64,
+        landed_ms: i64,
+    },
     DurationChanged {
         duration_ms: Option<i64>,
     },
@@ -57,6 +61,10 @@ impl From<PlayerEvent> for NativeEvent {
             PlayerEvent::DurationChanged { duration_ms } => {
                 NativeEvent::DurationChanged { duration_ms }
             }
+            PlayerEvent::SeekCompleted { requested, landed } => NativeEvent::SeekCompleted {
+                requested_ms: requested.nanoseconds() / 1_000_000,
+                landed_ms: landed.nanoseconds() / 1_000_000,
+            },
             PlayerEvent::AudioProgress { media_time } => NativeEvent::AudioProgress {
                 position_ms: media_time.nanoseconds() / 1_000_000,
             },

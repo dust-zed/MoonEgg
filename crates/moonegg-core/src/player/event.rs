@@ -19,6 +19,10 @@ pub enum PlayerEvent {
     AudioProgress {
         media_time: MediaTime,
     },
+    SeekCompleted {
+        requested: MediaTime,
+        landed: MediaTime,
+    },
     CommandRejected {
         command: PlayerCommand,
         state: PlayerState,

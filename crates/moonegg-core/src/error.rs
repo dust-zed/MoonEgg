@@ -27,6 +27,7 @@ pub enum RuntimeError {
         actual: PlaybackEpoch,
     },
 
+    FeedbackDisconnected,
     WorkerAlreadyExists,
     WorkerNotPrepared,
     Cancelled,

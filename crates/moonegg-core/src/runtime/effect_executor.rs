@@ -45,6 +45,18 @@ impl EffectFeedback {
         self.send(WorkerEvent::PreparationCompleted { epoch: self.epoch })
     }
 
+    pub(super) fn seek_completed(
+        &self,
+        requested: MediaTime,
+        landed: MediaTime,
+    ) -> Result<(), FeedbackDisconnected> {
+        self.send(WorkerEvent::SeekCompleted {
+            epoch: self.epoch,
+            requested,
+            landed,
+        })
+    }
+
     pub(super) fn failed(&self, error: PlaybackError) -> Result<(), FeedbackDisconnected> {
         self.send(WorkerEvent::Failed {
             epoch: self.epoch,

@@ -178,6 +178,19 @@ impl ControlLoop {
                     event: Some(PlayerEvent::DurationChanged { duration_ms }),
                 })
             }
+            WorkerEvent::SeekCompleted {
+                epoch,
+                requested,
+                landed,
+            } => {
+                if epoch != self.epoch {
+                    return Ok(ControlOutcome::none());
+                }
+                Ok(ControlOutcome {
+                    effect: None,
+                    event: Some(PlayerEvent::SeekCompleted { requested, landed }),
+                })
+            }
             WorkerEvent::Failed { epoch, error } => {
                 if epoch != self.epoch {
                     return Ok(ControlOutcome::none());
