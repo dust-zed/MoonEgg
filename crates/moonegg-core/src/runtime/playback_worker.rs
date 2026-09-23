@@ -7,7 +7,7 @@ use std::{
 use crate::{
     error::{self, PlaybackError, RuntimeError},
     media::{AudioBuffer, MediaTime},
-    pipeline::{self, PlaybackEpoch, PlaybackPipeline, PlaybackStepResult},
+    pipeline::{self, PlaybackEpoch, PlaybackPipeline, PlaybackPipelineError, PlaybackStepResult},
     ports::{AudioOutput, Decoder, Demuxer},
     runtime::{
         effect_executor::EffectFeedback,
@@ -108,6 +108,20 @@ where
         }
     }
 
+    fn report_prepared(&mut self) -> bool {
+        let Some(pipeline) = self.pipeline.as_ref() else {
+            return self.report_failure(PlaybackError::Runtime(RuntimeError::SessionFailed));
+        };
+
+        let duration_ms = pipeline.duration_ms();
+        let result = self
+            .feedback
+            .duration_changed(duration_ms)
+            .and_then(|_| self.feedback.preparation_completed());
+
+        result.is_ok()
+    }
+
     fn report_failure(&mut self, error: PlaybackError) -> bool {
         self.close_pipeline();
 
@@ -128,7 +142,7 @@ where
         let feedback_connected = match preparation_error {
             Some(error) => self.report_failure(error),
 
-            None => self.feedback.preparation_completed().is_ok(),
+            None => self.report_prepared(),
         };
 
         if !feedback_connected {

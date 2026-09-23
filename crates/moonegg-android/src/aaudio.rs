@@ -179,11 +179,11 @@ impl AAudioPcmStream {
         use AudioStreamState::*;
 
         match self.current_state()? {
-            Started | Starting => return Ok(()),
+            Started | Starting => Ok(()),
             Open | Paused | Flushed | Stopped => {
                 self.stream.request_start().map_err(AAudioError::Native)
             }
-            _ => return Err(AAudioError::InvalidState),
+            _ => Err(AAudioError::InvalidState),
         }
     }
 

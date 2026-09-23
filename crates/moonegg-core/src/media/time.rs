@@ -176,6 +176,14 @@ impl TimeSpan {
     pub const fn time_base(self) -> TimeBase {
         self.time_base
     }
+
+    pub fn to_milliseconds(self) -> Result<i64, TimeError> {
+        let numerator = u128::from(self.time_base.numerator);
+        let denominator = u128::from(self.time_base.denominator);
+        let duration_ms_wide = self.ticks as u128 * numerator * 1000 / denominator;
+
+        i64::try_from(duration_ms_wide).map_err(|_| TimeError::Overflow)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

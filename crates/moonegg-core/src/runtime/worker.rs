@@ -17,6 +17,10 @@ pub enum WorkerEvent {
     PreparationCompleted {
         epoch: PlaybackEpoch,
     },
+    DurationChanged {
+        epoch: PlaybackEpoch,
+        duration_ms: Option<i64>,
+    },
     Failed {
         epoch: PlaybackEpoch,
         error: PlaybackError,
