@@ -8,6 +8,37 @@ use crate::{
     ports::{DemuxError, Demuxer, ReadPacketResult},
 };
 
+use std::io::{ErrorKind, Read, Seek, SeekFrom};
+
+// 输入从偏移 0 开始表示完整 WAV；成功后游标位于 12。
+fn read_riff_header<R: Read + Seek>(reader: &mut R) -> Result<u64, DemuxError> {
+    let source_len = reader.seek(SeekFrom::End(0)).map_err(|_| DemuxError::Io)?;
+    if source_len < 12 {
+        return Err(DemuxError::InvalidData);
+    }
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| DemuxError::Io)?;
+    let mut header = [0u8; 12];
+    reader.read_exact(&mut header).map_err(|error| {
+        if error.kind() == ErrorKind::UnexpectedEof {
+            DemuxError::InvalidData
+        } else {
+            DemuxError::Io
+        }
+    })?;
+    if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
+        return Err(DemuxError::InvalidData);
+    }
+    let riff_size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+    let riff_end = u64::from(riff_size) + 8;
+
+    if riff_end < 12 || riff_end > source_len {
+        return Err(DemuxError::InvalidData);
+    }
+    Ok(riff_end)
+}
+
 fn parse_pcm_format(data: &[u8]) -> Result<AudioTrackFormat, DemuxError> {
     if data.len() < 16 {
         return Err(DemuxError::InvalidData);
@@ -268,4 +299,63 @@ impl Demuxer for WavDemuxer {
     fn tracks(&self) -> &[TrackInfo] {
         &self.tracks
     }
+}
+
+#[derive(Debug)]
+struct WavChunk {
+    id: [u8; 4],
+    payload: Range<u64>,
+    next_offset: u64,
+}
+
+// riff_end 应来自已校验的 RIFF 头
+// 调用前游标应位于 chunk 头部或 riff_end
+// 返回 Some 时只保证头部和声明范围合法，尚未读取 payload。
+fn read_chunk_header<R: Read + Seek>(
+    reader: &mut R,
+    riff_end: u64,
+) -> Result<Option<WavChunk>, DemuxError> {
+    let chunk_start = reader.stream_position().map_err(|_| DemuxError::Io)?;
+
+    if chunk_start == riff_end {
+        return Ok(None);
+    }
+
+    if chunk_start > riff_end {
+        return Err(DemuxError::InvalidData);
+    }
+
+    if riff_end - chunk_start < 8 {
+        return Err(DemuxError::InvalidData);
+    }
+
+    let mut header = [0; 8];
+    reader.read_exact(&mut header).map_err(|error| {
+        if error.kind() == ErrorKind::UnexpectedEof {
+            DemuxError::InvalidData
+        } else {
+            DemuxError::Io
+        }
+    })?;
+    let id = [header[0], header[1], header[2], header[3]];
+    let chunk_size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+    let chunk_size = u64::from(chunk_size);
+
+    let payload_start = chunk_start.checked_add(8).ok_or(DemuxError::InvalidData)?;
+    let payload_end = payload_start
+        .checked_add(chunk_size)
+        .ok_or(DemuxError::InvalidData)?;
+    let next_offset = payload_end
+        .checked_add(chunk_size % 2)
+        .ok_or(DemuxError::InvalidData)?;
+
+    if payload_end > riff_end || next_offset > riff_end {
+        return Err(DemuxError::InvalidData);
+    }
+
+    Ok(Some(WavChunk {
+        id,
+        payload: payload_start..payload_end,
+        next_offset,
+    }))
 }
