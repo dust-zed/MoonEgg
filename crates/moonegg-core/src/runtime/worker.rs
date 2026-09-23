@@ -29,6 +29,11 @@ pub enum WorkerEvent {
         epoch: PlaybackEpoch,
         media_time: MediaTime,
     },
+    SeekCompleted {
+        epoch: PlaybackEpoch,
+        requested: MediaTime,
+        landed: MediaTime,
+    },
     PlaybackCompleted {
         epoch: PlaybackEpoch,
     },

@@ -82,7 +82,7 @@ where
             }
 
             PlaybackWorkerAction::Seek { target } => {
-                pipeline
+                let seek_outcome = pipeline
                     .seek(target, command_epoch)
                     .map_err(PlaybackError::Pipeline)?;
 
@@ -92,6 +92,9 @@ where
                 if self.running {
                     pipeline.start().map_err(PlaybackError::Pipeline)?;
                 }
+                self.feedback
+                    .seek_completed(seek_outcome.requested, seek_outcome.landed)
+                    .map_err(|_| PlaybackError::Runtime(RuntimeError::FeedbackDisconnected))?;
             }
         }
         Ok(())
