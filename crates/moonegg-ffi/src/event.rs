@@ -33,6 +33,9 @@ pub enum NativeEvent {
         previous: NativeState,
         current: NativeState,
     },
+    DurationChanged {
+        duration_ms: Option<i64>,
+    },
     AudioProgress {
         position_ms: i64,
     },
@@ -51,6 +54,9 @@ impl From<PlayerEvent> for NativeEvent {
                 previous: previous.into(),
                 current: current.into(),
             },
+            PlayerEvent::DurationChanged { duration_ms } => {
+                NativeEvent::DurationChanged { duration_ms }
+            }
             PlayerEvent::AudioProgress { media_time } => NativeEvent::AudioProgress {
                 position_ms: media_time.nanoseconds() / 1_000_000,
             },

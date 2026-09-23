@@ -1,7 +1,6 @@
 use crate::{
     error::PlaybackError,
     media::MediaTime,
-    pipeline::PlaybackEpoch,
     player::{PlayerCommand, PlayerState},
 };
 
@@ -10,6 +9,9 @@ pub enum PlayerEvent {
     StateChanged {
         previous: PlayerState,
         current: PlayerState,
+    },
+    DurationChanged {
+        duration_ms: Option<i64>,
     },
     PlaybackFailed {
         error: PlaybackError,

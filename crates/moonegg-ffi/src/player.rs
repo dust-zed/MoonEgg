@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex, mpsc::TryRecvError},
 };
 
-use moonegg_core::{PlayerCommand, PlayerEngine};
+use moonegg_core::{PlayerCommand, PlayerEngine, media::MediaTime};
 
 use crate::event::NativeEvent;
 
@@ -21,6 +21,10 @@ pub enum PlayerBridgeError {
     CommandChannelClosed,
     #[error("播放器事件通道已关闭")]
     EventChannelClosed,
+    #[error("跳转位置不能为负数: {position_ms} ms")]
+    NegativeSeekPosition { position_ms: i64 },
+    #[error("跳转位置超出支持范围： {position_ms} ms")]
+    SeekPositionOverflow { position_ms: i64 },
 }
 
 #[derive(uniffi::Object)]
@@ -98,6 +102,22 @@ impl NativePlayer {
             Err(TryRecvError::Empty) => Ok(None),
             Err(TryRecvError::Disconnected) => Err(PlayerBridgeError::EventChannelClosed),
         }
+    }
+
+    /// 请求跳转到指定位置，单位为毫秒。
+    ///
+    /// 负数或无法转换为纳秒的位置会返回参数错误。
+    /// 返回成功仅表示命令已提交，不代表跳转已完成。
+    /// 当前状态是否允许跳转，由核心状态机判断。
+    pub fn seek(&self, position_ms: i64) -> Result<(), PlayerBridgeError> {
+        if position_ms < 0 {
+            return Err(PlayerBridgeError::NegativeSeekPosition { position_ms });
+        }
+        let position_ns_wide = position_ms as i128 * 1_000_000;
+        let position_ns = i64::try_from(position_ns_wide)
+            .map_err(|_| PlayerBridgeError::SeekPositionOverflow { position_ms })?;
+        let media_time = MediaTime::from_nanoseconds(position_ns);
+        self.send(PlayerCommand::Seek(media_time))
     }
 }
 

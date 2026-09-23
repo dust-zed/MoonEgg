@@ -60,6 +60,7 @@ pub struct PlaybackPipeline<X, D, O> {
 
     pending_packet: Option<EpochItem<Packet>>,
     source_phase: SourcePhase,
+    duration_ms: Option<i64>,
 }
 
 impl<X, D, O> PlaybackPipeline<X, D, O>
@@ -96,6 +97,15 @@ where
             None => MediaTime::from_nanoseconds(0),
         };
 
+        let duration_ms = match track.duration() {
+            Some(duration) => Some(
+                duration
+                    .to_milliseconds()
+                    .map_err(PlaybackPipelineError::Time)?,
+            ),
+            None => None,
+        };
+
         let mut audio = AudioPipeline::new(decoder, output, audio_track, epoch, packet_capacity)
             .map_err(PlaybackPipelineError::Audio)?;
 
@@ -114,6 +124,7 @@ where
             clock,
             pending_packet: None,
             source_phase: SourcePhase::Reading,
+            duration_ms,
         })
     }
 
@@ -270,6 +281,10 @@ where
         self.audio
             .playback_position()
             .map_err(PlaybackPipelineError::Audio)
+    }
+
+    pub fn duration_ms(&self) -> Option<i64> {
+        self.duration_ms
     }
 
     pub fn is_finished(&mut self) -> Result<bool, PlaybackPipelineError> {

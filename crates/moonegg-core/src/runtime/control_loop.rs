@@ -169,6 +169,15 @@ impl ControlLoop {
                     }),
                 })
             }
+            WorkerEvent::DurationChanged { epoch, duration_ms } => {
+                if epoch != self.epoch {
+                    return Ok(ControlOutcome::none());
+                }
+                Ok(ControlOutcome {
+                    effect: None,
+                    event: Some(PlayerEvent::DurationChanged { duration_ms }),
+                })
+            }
             WorkerEvent::Failed { epoch, error } => {
                 if epoch != self.epoch {
                     return Ok(ControlOutcome::none());

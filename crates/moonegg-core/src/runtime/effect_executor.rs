@@ -69,6 +69,16 @@ impl EffectFeedback {
         })
     }
 
+    pub(super) fn duration_changed(
+        &self,
+        duration_ms: Option<i64>,
+    ) -> Result<(), FeedbackDisconnected> {
+        self.send(WorkerEvent::DurationChanged {
+            epoch: self.epoch,
+            duration_ms,
+        })
+    }
+
     pub(super) fn playback_completed(&self) -> Result<(), FeedbackDisconnected> {
         self.send(WorkerEvent::PlaybackCompleted { epoch: self.epoch })
     }
