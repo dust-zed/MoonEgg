@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{ops::Range, range};
 
 use crate::{
     media::{
@@ -358,4 +358,70 @@ fn read_chunk_header<R: Read + Seek>(
         payload: payload_start..payload_end,
         next_offset,
     }))
+}
+
+#[derive(Debug)]
+struct WavLayout {
+    format: AudioTrackFormat,
+    data_range: Range<u64>,
+}
+
+fn read_wav_layout<R: Read + Seek>(reader: &mut R) -> Result<WavLayout, DemuxError> {
+    let riff_end = read_riff_header(reader)?;
+
+    let mut format = None;
+    let mut data_range = None;
+
+    while let Some(chunk) = read_chunk_header(reader, riff_end)? {
+        match &chunk.id {
+            b"fmt " => {
+                if let Some(format) = format {
+                    return Err(DemuxError::Unsupported);
+                }
+                let payload_len = chunk.payload.end - chunk.payload.start;
+                if payload_len < 16 {
+                    return Err(DemuxError::InvalidData);
+                }
+                let mut format_bytes = [0u8; 16];
+                reader.read_exact(&mut format_bytes).map_err(|error| {
+                    if error.kind() == ErrorKind::Unsupported {
+                        DemuxError::InvalidData
+                    } else {
+                        DemuxError::Io
+                    }
+                })?;
+
+                format = Some(parse_pcm_format(&format_bytes)?);
+            }
+            b"data" => {
+                if let Some(range) = data_range {
+                    return Err(DemuxError::Unsupported);
+                }
+                data_range = Some(chunk.payload);
+            }
+            _ => {}
+        }
+        reader
+            .seek(SeekFrom::Start(chunk.next_offset))
+            .map_err(|error| {
+                if error.kind() == ErrorKind::UnexpectedEof {
+                    DemuxError::InvalidData
+                } else {
+                    DemuxError::Io
+                }
+            })?;
+    }
+
+    let (Some(format), Some(data_range)) = (format, data_range) else {
+        return Err(DemuxError::InvalidData);
+    };
+
+    let bytes_per_frame = u64::from(format.channel_count()) * 2;
+    let data_len = data_range.end - data_range.start;
+
+    if data_len % bytes_per_frame != 0 {
+        return Err(DemuxError::InvalidData);
+    }
+
+    Ok(WavLayout { format, data_range })
 }
