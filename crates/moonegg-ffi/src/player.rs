@@ -25,6 +25,10 @@ pub enum PlayerBridgeError {
     NegativeSeekPosition { position_ms: i64 },
     #[error("跳转位置超出支持范围： {position_ms} ms")]
     SeekPositionOverflow { position_ms: i64 },
+    #[error("文件描述符不能为负数：{fd}")]
+    InvalidFileDescriptor { fd: i32 },
+    #[error("无效的输入范围： offset={offset}, length={length}")]
+    InvalidSourceRange { offset: i64, length: i64 },
 }
 
 #[derive(uniffi::Object)]
@@ -131,6 +135,49 @@ impl NativePlayer {
         engine
             .send_command(command)
             .map_err(|_| PlayerBridgeError::CommandChannelClosed)
+    }
+}
+
+#[cfg(target_os = "android")]
+#[uniffi::export]
+impl NativePlayer {
+    #[uniffi::constructor]
+    pub fn from_file_descriptor(
+        fd: i32,
+        offset: i64,
+        length: i64,
+    ) -> Result<Arc<Self>, PlayerBridgeError> {
+        use moonegg_android::{AndroidAudioOutputFactory, duplicate_file_descriptor};
+        use moonegg_core::FileSource;
+
+        if fd < 0 {
+            return Err(PlayerBridgeError::InvalidFileDescriptor { fd });
+        }
+
+        if offset < 0 || length < 0 || offset.checked_add(length).is_none() {
+            return Err(PlayerBridgeError::InvalidSourceRange { offset, length });
+        }
+        let file =
+            duplicate_file_descriptor(fd).map_err(|err| PlayerBridgeError::CreatedFailed {
+                reason: format!("复制文件描述符失败: {err}"),
+            })?;
+
+        let source = FileSource::Region {
+            file,
+            start: offset as u64,
+            length: length as u64,
+        };
+
+        let engine =
+            PlayerEngine::new_wav_source(source, AndroidAudioOutputFactory).map_err(|error| {
+                PlayerBridgeError::CreatedFailed {
+                    reason: format!("创建失败: {error}"),
+                }
+            })?;
+        let player = Self {
+            engine: Mutex::new(Some(engine)),
+        };
+        Ok(Arc::new(player))
     }
 }
 

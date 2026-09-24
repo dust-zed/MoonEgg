@@ -9,3 +9,6 @@ mod file_source;
 
 #[cfg(target_os = "android")]
 pub use audio_output::{AndroidAudioOutput, AndroidAudioOutputFactory};
+
+#[cfg(target_os = "android")]
+pub use file_source::duplicate_file_descriptor;
