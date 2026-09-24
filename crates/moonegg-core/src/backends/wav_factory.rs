@@ -1,4 +1,4 @@
-use std::{fs::File, path::PathBuf};
+use std::fs::File;
 
 use crate::{
     backends::{pcm::PcmDecoder, wav::WavDemuxer},
@@ -7,17 +7,18 @@ use crate::{
     pipeline::PlaybackPipelineError,
     ports::{AudioOutputFactory, DemuxError},
     runtime::{AudioPipelineFactory, CancellationToken},
+    source::{BoundedReader, FileSource},
 };
 
 pub(crate) struct WavPlaybackFactory<F> {
-    path: PathBuf,
+    source: FileSource,
     output_factory: F,
 }
 
 impl<F> WavPlaybackFactory<F> {
-    pub(crate) fn new(path: PathBuf, output_factory: F) -> Self {
+    pub(crate) fn new(source: FileSource, output_factory: F) -> Self {
         Self {
-            path,
+            source,
             output_factory,
         }
     }
@@ -27,18 +28,21 @@ impl<F> AudioPipelineFactory for WavPlaybackFactory<F>
 where
     F: AudioOutputFactory,
 {
-    type Demux = WavDemuxer<File>;
+    type Demux = WavDemuxer<BoundedReader<File>>;
     type Decode = PcmDecoder;
     type Output = F::Output;
 
     fn open_demuxer(&self, cancel: &CancellationToken) -> Result<Self::Demux, PlaybackError> {
         Self::check_canceled(cancel)?;
 
-        let file = File::open(&self.path).map_err(|_| PlaybackError::Demux(DemuxError::Io))?;
+        let reader = self
+            .source
+            .open_reader()
+            .map_err(|_| PlaybackError::Demux(DemuxError::Io))?;
 
         Self::check_canceled(cancel)?;
 
-        WavDemuxer::from_reader(file).map_err(PlaybackError::Demux)
+        WavDemuxer::from_reader(reader).map_err(PlaybackError::Demux)
     }
 
     fn create_audio_components(
