@@ -93,12 +93,7 @@ impl FileSource {
                 let file = File::open(path)?;
                 let metadata = file.metadata()?;
                 let length = metadata.len();
-                Ok(BoundedReader {
-                    inner: file,
-                    start: 0,
-                    length,
-                    position: 0,
-                })
+                BoundedReader::new(file, 0, length)
             }
             FileSource::Region {
                 file,
