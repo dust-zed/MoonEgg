@@ -17,6 +17,7 @@ use crate::{
         EffectExecutor, EffectLoopExit, PlaybackEffectExecutor, ShutdownReport, ThreadTermination,
         run_effect_loop,
     },
+    source::FileSource,
 };
 
 pub struct PlayerEngine {
@@ -67,11 +68,18 @@ impl PlayerEngine {
         })
     }
 
-    pub fn new_wav<F>(path: PathBuf, output_factoty: F) -> io::Result<Self>
+    pub fn new_wav<F>(path: PathBuf, output_factory: F) -> io::Result<Self>
     where
         F: AudioOutputFactory,
     {
-        Self::new_audio(WavPlaybackFactory::new(path, output_factoty))
+        Self::new_wav_source(FileSource::Path(path), output_factory)
+    }
+
+    pub fn new_wav_source<F>(source: FileSource, output_factory: F) -> io::Result<Self>
+    where
+        F: AudioOutputFactory,
+    {
+        Self::new_audio(WavPlaybackFactory::new(source, output_factory))
     }
 
     pub fn new_wav_simulated(path: PathBuf) -> io::Result<Self> {

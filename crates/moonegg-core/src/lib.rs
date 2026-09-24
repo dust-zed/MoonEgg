@@ -19,6 +19,7 @@ mod source;
 pub use engine::PlayerEngine;
 pub use player::{PlayerCommand, PlayerEvent, PlayerState};
 pub use runtime::ShutdownReport;
+pub use source::FileSource;
 
 #[must_use]
 pub const fn version() -> &'static str {

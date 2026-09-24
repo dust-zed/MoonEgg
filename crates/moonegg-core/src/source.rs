@@ -1,4 +1,8 @@
-use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
+use std::{
+    fs::File,
+    io::{self, ErrorKind, Read, Seek, SeekFrom},
+    path::PathBuf,
+};
 
 pub(crate) struct BoundedReader<R> {
     inner: R,
@@ -74,5 +78,36 @@ impl<R: Seek + Read> Read for BoundedReader<R> {
 
         self.position += bytes_read as u64;
         Ok(bytes_read)
+    }
+}
+
+pub enum FileSource {
+    Path(PathBuf),
+    Region { file: File, start: u64, length: u64 },
+}
+
+impl FileSource {
+    pub(crate) fn open_reader(&self) -> io::Result<BoundedReader<File>> {
+        match self {
+            FileSource::Path(path) => {
+                let file = File::open(path)?;
+                let metadata = file.metadata()?;
+                let length = metadata.len();
+                Ok(BoundedReader {
+                    inner: file,
+                    start: 0,
+                    length,
+                    position: 0,
+                })
+            }
+            FileSource::Region {
+                file,
+                start,
+                length,
+            } => {
+                let playback_file = file.try_clone()?;
+                BoundedReader::new(playback_file, *start, *length)
+            }
+        }
     }
 }
