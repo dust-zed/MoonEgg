@@ -326,6 +326,7 @@ dependencies = [
  "libc",
  "moonegg-core",
  "ndk",
+ "ndk-sys",
  "thiserror 2.0.20",
 ]
 
