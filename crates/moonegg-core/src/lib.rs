@@ -14,6 +14,8 @@ mod timing;
 
 mod backends;
 
+mod source;
+
 pub use engine::PlayerEngine;
 pub use player::{PlayerCommand, PlayerEvent, PlayerState};
 pub use runtime::ShutdownReport;
