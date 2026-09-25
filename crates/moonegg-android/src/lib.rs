@@ -11,6 +11,9 @@ mod file_source;
 mod media_extractor;
 
 #[cfg(target_os = "android")]
+mod media_format;
+
+#[cfg(target_os = "android")]
 pub use audio_output::{AndroidAudioOutput, AndroidAudioOutputFactory};
 
 #[cfg(target_os = "android")]
