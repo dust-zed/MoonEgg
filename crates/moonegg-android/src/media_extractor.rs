@@ -1,9 +1,16 @@
-use std::{fs::File, os::fd::AsRawFd, ptr::NonNull};
+use std::{
+    ffi::CStr,
+    fs::File,
+    os::fd::AsRawFd,
+    ptr::{NonNull, null},
+};
 
 use ndk_sys::{
-    AMediaExtractor_delete, AMediaExtractor_getTrackCount, AMediaExtractor_new,
-    AMediaExtractor_setDataSource, AMediaExtractor_setDataSourceFd, media_status_t,
+    AMediaExtractor_delete, AMediaExtractor_getTrackCount, AMediaExtractor_getTrackFormat,
+    AMediaExtractor_new, AMediaExtractor_setDataSourceFd, media_status_t,
 };
+
+use crate::media_format::NativeMediaFormat;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum MediaExtractorError {
@@ -13,6 +20,13 @@ pub(crate) enum MediaExtractorError {
     CreateFailed,
     #[error("设置数据源出错： {status:?}")]
     SetDataSourceFailed { status: i32 },
+    #[error("索引传递错误, track_index: {track_index}, track_count: {track_count}")]
+    InvalidTrackIndex {
+        track_index: usize,
+        track_count: usize,
+    },
+    #[error("未能取得Track format: {track_index}")]
+    GetTrackFormatFailed { track_index: usize },
 }
 
 pub(crate) struct NativeMediaExtractor {
@@ -58,6 +72,28 @@ impl NativeMediaExtractor {
 
     pub(crate) fn track_count(&self) -> usize {
         unsafe { AMediaExtractor_getTrackCount(self.inner.as_ptr()) }
+    }
+
+    pub(crate) fn track_format(
+        &self,
+        track_index: usize,
+    ) -> Result<NativeMediaFormat, MediaExtractorError> {
+        let track_count = self.track_count();
+
+        if track_count <= track_index {
+            return Err(MediaExtractorError::InvalidTrackIndex {
+                track_index,
+                track_count,
+            });
+        }
+
+        let raw_format =
+            unsafe { AMediaExtractor_getTrackFormat(self.inner.as_ptr(), track_index) };
+
+        let track_format = unsafe { NativeMediaFormat::from_owned_raw(raw_format) }
+            .ok_or(MediaExtractorError::GetTrackFormatFailed { track_index })?;
+
+        Ok(track_format)
     }
 }
 
