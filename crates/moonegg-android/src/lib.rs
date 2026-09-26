@@ -17,6 +17,9 @@ mod media_format;
 mod track_probe;
 
 #[cfg(target_os = "android")]
+mod android_demuxer;
+
+#[cfg(target_os = "android")]
 pub use audio_output::{AndroidAudioOutput, AndroidAudioOutputFactory};
 
 #[cfg(target_os = "android")]

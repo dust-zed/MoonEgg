@@ -1,10 +1,12 @@
 use std::{fs::File, os::fd::AsRawFd, ptr::NonNull};
 
 use ndk_sys::{
-    AMediaExtractor_advance, AMediaExtractor_delete, AMediaExtractor_getSampleSize,
+    AMediaExtractor_advance, AMediaExtractor_delete, AMediaExtractor_getSampleFlags,
+    AMediaExtractor_getSampleSize, AMediaExtractor_getSampleTime,
     AMediaExtractor_getSampleTrackIndex, AMediaExtractor_getTrackCount,
     AMediaExtractor_getTrackFormat, AMediaExtractor_new, AMediaExtractor_readSampleData,
-    AMediaExtractor_selectTrack, AMediaExtractor_setDataSourceFd, media_status_t,
+    AMediaExtractor_seekTo, AMediaExtractor_selectTrack, AMediaExtractor_setDataSourceFd, SeekMode,
+    media_status_t,
 };
 
 use crate::media_format::NativeMediaFormat;
@@ -30,6 +32,10 @@ pub(crate) enum MediaExtractorError {
     ReadSampleFailed,
     #[error("")]
     InvalidReadSize { size: usize, capacity: usize },
+    #[error("")]
+    InvalidSeekTarget { target_us: i64 },
+    #[error("")]
+    SeekFailed { target_us: i64, status: i32 },
 }
 
 pub(crate) struct NativeMediaExtractor {
@@ -167,10 +173,52 @@ impl NativeMediaExtractor {
         Ok(bytes_read)
     }
 
+    pub(crate) fn sample_time_us(&self) -> Option<i64> {
+        // SAFETY：
+        // extractor 有效且未释放
+        let raw_time_us = unsafe { AMediaExtractor_getSampleTime(self.inner.as_ptr()) };
+
+        if raw_time_us == -1 {
+            return None;
+        }
+
+        Some(raw_time_us)
+    }
+
+    pub(crate) fn sample_flags(&self) -> u32 {
+        //SAFETY:
+        // extractor 有效且未释放
+        unsafe { AMediaExtractor_getSampleFlags(self.inner.as_ptr()) }
+    }
+
     pub(crate) fn advance(&mut self) -> bool {
         // SAFETY:
         // extractor 有效，当前方法独占借用 self。
         unsafe { AMediaExtractor_advance(self.inner.as_ptr()) }
+    }
+
+    pub(crate) fn seek_to_us(&mut self, target_us: i64) -> Result<(), MediaExtractorError> {
+        if target_us < 0 {
+            return Err(MediaExtractorError::InvalidSeekTarget { target_us });
+        }
+
+        // SAFETY:
+        // extractor 有效且未释放
+        // 当前独占借用 self，
+        let status = unsafe {
+            AMediaExtractor_seekTo(
+                self.inner.as_ptr(),
+                target_us,
+                SeekMode::AMEDIAEXTRACTOR_SEEK_PREVIOUS_SYNC,
+            )
+        };
+        if status != media_status_t::AMEDIA_OK {
+            return Err(MediaExtractorError::SeekFailed {
+                target_us,
+                status: status.0,
+            });
+        }
+        Ok(())
     }
 }
 
