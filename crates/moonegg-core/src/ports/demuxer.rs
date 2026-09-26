@@ -15,6 +15,7 @@ pub enum DemuxError {
     Unsupported,
     NotSeekable,
     Io,
+    Platform,
 }
 
 pub trait Demuxer {
