@@ -60,6 +60,7 @@ impl AndroidDecoderError {
                 | MediaCodecError::QueueInputFailed { .. }
                 | MediaCodecError::DequeueOutputFailed { .. }
                 | MediaCodecError::GetOutputFormatFailed
+                | MediaCodecError::OutputBufferTooSmall { .. }
                 | MediaCodecError::InvalidOutputSize { .. }
                 | MediaCodecError::NullOutputBuffer { .. }
                 | MediaCodecError::ReleaseOutputFailed { .. }

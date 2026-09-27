@@ -36,6 +36,8 @@ pub(crate) enum MediaCodecError {
     #[error("")]
     InputBufferTooSmall { required: usize, capacity: usize },
     #[error("")]
+    OutputBufferTooSmall { required: usize, capacity: usize },
+    #[error("")]
     QueueInputFailed { status: i32 },
     #[error("")]
     DequeueOutputFailed { status: isize },
@@ -326,13 +328,20 @@ impl NativeMediaCodec {
             return Ok(vec![]);
         }
 
-        let mut reported_size = 0usize;
+        let mut reported_capacity = 0usize;
         let raw_buffer = unsafe {
-            AMediaCodec_getOutputBuffer(self.inner.as_ptr(), output_index, &mut reported_size)
+            AMediaCodec_getOutputBuffer(self.inner.as_ptr(), output_index, &mut reported_capacity)
         };
         if raw_buffer.is_null() {
             return Err(MediaCodecError::NullOutputBuffer {
                 index: output_index,
+            });
+        }
+        // 容量用于检查边界；本次有效长度决定复制范围。
+        if byte_len > reported_capacity {
+            return Err(MediaCodecError::OutputBufferTooSmall {
+                required: byte_len,
+                capacity: reported_capacity,
             });
         }
         let buffer = unsafe { from_raw_parts(raw_buffer, byte_len) }.to_vec();
