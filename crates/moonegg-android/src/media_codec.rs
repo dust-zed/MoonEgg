@@ -364,14 +364,14 @@ impl NativeMediaCodec {
                 if has_eos {
                     self.output_eos_seen = true;
                 }
-                if output_buffer.data.is_empty() && has_eos {
-                    Ok(CodecOutput::EndOfStream)
-                } else if !has_eos {
-                    Ok(CodecOutput::NotReady)
-                } else {
+                if !output_buffer.data.is_empty() {
                     Ok(CodecOutput::Buffer {
                         buffer: output_buffer,
                     })
+                } else if has_eos {
+                    Ok(CodecOutput::EndOfStream)
+                } else {
+                    Ok(CodecOutput::NotReady)
                 }
             }
         }
