@@ -20,6 +20,12 @@ mod track_probe;
 mod android_demuxer;
 
 #[cfg(target_os = "android")]
+mod decoder_format;
+
+#[cfg(target_os = "android")]
+mod media_codec;
+
+#[cfg(target_os = "android")]
 pub use audio_output::{AndroidAudioOutput, AndroidAudioOutputFactory};
 
 #[cfg(target_os = "android")]
