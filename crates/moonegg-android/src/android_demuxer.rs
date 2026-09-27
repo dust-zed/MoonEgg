@@ -44,6 +44,7 @@ fn map_probe_error(error: TrackProbeError) -> DemuxError {
         TrackProbeError::Format { source, .. } => match source {
             MediaFormatError::InvalidUtf8 => DemuxError::InvalidData,
             MediaFormatError::NullBufferPointer
+            | MediaFormatError::CreateFailed
             | MediaFormatError::NullStringPointer
             | MediaFormatError::InvalidBufferSize { .. } => DemuxError::Platform,
         },
@@ -264,12 +265,12 @@ impl AndroidDemuxer {
 
 impl Demuxer for AndroidDemuxer {
     fn seek(&mut self, target: MediaTime) -> Result<MediaTime, DemuxError> {
-        todo!()
+        AndroidDemuxer::seek(self, target).map_err(|error| error.into_demux_error())
     }
     fn tracks(&self) -> &[TrackInfo] {
-        todo!()
+        AndroidDemuxer::tracks(self)
     }
     fn read_packet(&mut self) -> Result<ReadPacketResult, DemuxError> {
-        todo!()
+        AndroidDemuxer::read_packet(self).map_err(|error| error.into_demux_error())
     }
 }

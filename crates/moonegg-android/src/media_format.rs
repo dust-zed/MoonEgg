@@ -6,7 +6,8 @@ use std::{
 
 use ndk_sys::{
     AMediaFormat, AMediaFormat_delete, AMediaFormat_getBuffer, AMediaFormat_getInt32,
-    AMediaFormat_getInt64, AMediaFormat_getString,
+    AMediaFormat_getInt64, AMediaFormat_getString, AMediaFormat_new, AMediaFormat_setBuffer,
+    AMediaFormat_setInt32, AMediaFormat_setString,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -19,6 +20,8 @@ pub(crate) enum MediaFormatError {
     NullBufferPointer,
     #[error("")]
     InvalidBufferSize { size: usize },
+    #[error("")]
+    CreateFailed,
 }
 
 pub(crate) struct NativeMediaFormat {
@@ -33,6 +36,41 @@ impl NativeMediaFormat {
     pub(crate) unsafe fn from_owned_raw(raw_format: *mut AMediaFormat) -> Option<Self> {
         let inner = NonNull::new(raw_format)?;
         Some(Self { inner })
+    }
+
+    pub(crate) fn new() -> Result<Self, MediaFormatError> {
+        let raw_format = unsafe { AMediaFormat_new() };
+        // SAFETY：非空指针来自本次创建，尚未交给其他拥有者。
+        unsafe { Self::from_owned_raw(raw_format) }.ok_or(MediaFormatError::CreateFailed)
+    }
+
+    pub(crate) fn set_i32(&mut self, key: &CStr, value: i32) {
+        // SAFETY：格式对象有效，key 在调用期间有效，当前独占借用 self。
+        unsafe {
+            AMediaFormat_setInt32(self.inner.as_ptr(), key.as_ptr(), value);
+        }
+    }
+
+    pub(crate) fn set_string(&mut self, key: &CStr, value: &CStr) {
+        // SAFETY：格式对象有效，key 和 value 都是有效的 C 字符串。
+        // 平台复制字符串，调用结束后不再依赖 value 的存储。
+        unsafe {
+            AMediaFormat_setString(self.inner.as_ptr(), key.as_ptr(), value.as_ptr());
+        }
+    }
+
+    pub(crate) fn set_buffer(&mut self, key: &CStr, data: &[u8]) {
+        let data_len = data.len();
+        //    SAFETY：data 在调用期间有效，长度对应实际可读取范围。
+        //    平台复制数据，调用结束后不再依赖 data 的存储。
+        unsafe {
+            AMediaFormat_setBuffer(
+                self.inner.as_ptr(),
+                key.as_ptr(),
+                data.as_ptr() as *const c_void,
+                data_len,
+            );
+        }
     }
 
     pub(crate) fn get_string(&mut self, key: &CStr) -> Result<Option<String>, MediaFormatError> {
@@ -133,6 +171,10 @@ impl NativeMediaFormat {
 
         let data = borrowed_data.to_vec();
         Ok(Some(data))
+    }
+
+    pub(crate) fn as_ptr(&self) -> *const AMediaFormat {
+        self.inner.as_ptr()
     }
 }
 
