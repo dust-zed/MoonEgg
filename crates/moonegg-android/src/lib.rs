@@ -29,6 +29,9 @@ mod media_codec;
 mod pcm_output;
 
 #[cfg(target_os = "android")]
+mod android_decoder;
+
+#[cfg(target_os = "android")]
 pub use audio_output::{AndroidAudioOutput, AndroidAudioOutputFactory};
 
 #[cfg(target_os = "android")]
