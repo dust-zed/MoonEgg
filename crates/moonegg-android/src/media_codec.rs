@@ -75,6 +75,12 @@ pub(crate) struct CodecOutputBuffer {
     flags: u32,
 }
 
+impl CodecOutputBuffer {
+    pub(crate) fn into_parts(self) -> (Vec<u8>, i64, u32) {
+        (self.data, self.presentation_time_us, self.flags)
+    }
+}
+
 pub(crate) enum CodecOutput {
     NotReady,
     FormatChanged { format: NativeMediaFormat },

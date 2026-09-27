@@ -102,7 +102,7 @@ pub(crate) fn parse_pcm_output_format(
             .ok_or(PcmOutputError::MissingField {
                 field: "channel-count",
             })?;
-    if raw_channel_count < 0 {
+    if raw_channel_count <= 0 {
         return Err(PcmOutputError::InvalidField {
             field: "channel-count",
             value: raw_channel_count,
