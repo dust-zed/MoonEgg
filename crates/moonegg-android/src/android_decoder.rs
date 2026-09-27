@@ -3,7 +3,7 @@ use moonegg_core::{
         AudioBuffer, AudioTrackFormat, DecodedFrame, MediaTime, Rounding, TimeBase, TimeError,
         Timestamp, TrackId,
     },
-    ports::{DecodeInput, ReceiveResult, SubmitResult},
+    ports::{DecodeError, DecodeInput, Decoder, ReceiveResult, SubmitResult},
 };
 use ndk_sys::AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG;
 
@@ -37,11 +37,66 @@ pub(crate) enum AndroidDecoderError {
     UnsupportedInputTimestamp { timestamp: Timestamp },
 }
 
+impl AndroidDecoderError {
+    fn into_decode_error(self) -> DecodeError {
+        match self {
+            Self::Format { source } => match source {
+                DecoderFormatError::UnsupportedCodec { .. } => DecodeError::Unsupported,
+                DecoderFormatError::InvalidSampleRate { .. }
+                | DecoderFormatError::InvalidChannelCount { .. }
+                | DecoderFormatError::EmptyCodecConfig => DecodeError::InvalidData,
+                DecoderFormatError::Format { .. } => DecodeError::Platform,
+            },
+            Self::Codec { source } => match source {
+                MediaCodecError::InvalidState => DecodeError::InvalidState,
+                MediaCodecError::EmptyInput => DecodeError::InvalidData,
+                // 合法数据包也可能超过当前输入槽位容量。
+                MediaCodecError::InputBufferTooSmall { .. } => DecodeError::Unsupported,
+                MediaCodecError::CreateFailed
+                | MediaCodecError::ConfigureFailed { .. }
+                | MediaCodecError::StartFailed { .. }
+                | MediaCodecError::DequeueInputFailed { .. }
+                | MediaCodecError::NullInputBuffer { .. }
+                | MediaCodecError::QueueInputFailed { .. }
+                | MediaCodecError::DequeueOutputFailed { .. }
+                | MediaCodecError::GetOutputFormatFailed
+                | MediaCodecError::InvalidOutputSize { .. }
+                | MediaCodecError::NullOutputBuffer { .. }
+                | MediaCodecError::ReleaseOutputFailed { .. }
+                | MediaCodecError::FlushFailed { .. } => DecodeError::Platform,
+            },
+            Self::Pcm { source } => match source {
+                PcmOutputError::UnsupportedEncoding { .. } => DecodeError::Unsupported,
+                // 这些异常来自平台输出，不能据此断言输入媒体损坏。
+                PcmOutputError::Format { .. }
+                | PcmOutputError::MissingField { .. }
+                | PcmOutputError::InvalidField { .. }
+                | PcmOutputError::UnsupportedMime { .. }
+                | PcmOutputError::InvalidPcmLength { .. }
+                | PcmOutputError::InvalidAudioBuffer { .. } => DecodeError::Platform,
+            },
+            Self::InvalidState | Self::UnexpectedTrack { .. } => DecodeError::InvalidState,
+            Self::MissingPts => DecodeError::InvalidData,
+            Self::MissingOutputFormat => DecodeError::Platform,
+            Self::TimeConversion { reason } => match reason {
+                TimeError::InvalidTimeBase => DecodeError::InvalidData,
+                TimeError::Overflow => DecodeError::Unsupported,
+            },
+            // 时间戳可能合法，但超出了当前实现的表示或处理范围。
+            Self::TimestampOutOfRange { .. } | Self::UnsupportedInputTimestamp { .. } => {
+                DecodeError::Unsupported
+            }
+        }
+    }
+}
 pub(crate) struct AndroidAudioDecoder {
     codec: NativeMediaCodec,
     track_id: TrackId,
     pcm_format: Option<PcmOutputFormat>,
     failed: bool,
+    codec_config: Vec<u8>,
+    // 是否必须在普通输入前补交配置
+    codec_config_pending: bool,
 }
 
 impl AndroidAudioDecoder {
@@ -59,6 +114,8 @@ impl AndroidAudioDecoder {
             track_id,
             pcm_format: None,
             failed: false,
+            codec_config: audio_format.codec_config().to_vec(),
+            codec_config_pending: false,
         })
     }
 
@@ -113,6 +170,9 @@ impl AndroidAudioDecoder {
     }
 
     fn submit_inner(&mut self, input: DecodeInput) -> Result<SubmitResult, AndroidDecoderError> {
+        if !self.try_restore_codec_config()? {
+            return Ok(SubmitResult::Backpressure(input));
+        }
         match input {
             DecodeInput::Packet(packet) => {
                 if self.track_id != packet.track_id() {
@@ -162,16 +222,58 @@ impl AndroidAudioDecoder {
         }
         result
     }
+
+    fn flush(&mut self) -> Result<(), AndroidDecoderError> {
+        if self.failed {
+            return Err(AndroidDecoderError::InvalidState);
+        }
+        let needs_codec_config = self.codec_config_pending || !self.codec.has_output_started();
+        self.codec.flush().map_err(|error| {
+            self.failed = true;
+            AndroidDecoderError::Codec { source: error }
+        })?;
+        self.codec_config_pending = needs_codec_config;
+        Ok(())
+    }
+    fn try_restore_codec_config(&mut self) -> Result<bool, AndroidDecoderError> {
+        if !self.codec_config_pending {
+            return Ok(true);
+        }
+        match self
+            .codec
+            .try_queue_codec_config(&self.codec_config)
+            .map_err(|error| AndroidDecoderError::Codec { source: error })?
+        {
+            InputQueueResult::WouldBlock => Ok(false),
+            InputQueueResult::Queued => {
+                self.codec_config_pending = false;
+                Ok(true)
+            }
+        }
+    }
+}
+
+impl Decoder for AndroidAudioDecoder {
+    type Output = AudioBuffer;
+    fn flush(&mut self) -> Result<(), DecodeError> {
+        AndroidAudioDecoder::flush(self).map_err(|error| error.into_decode_error())
+    }
+    fn receive(&mut self) -> Result<ReceiveResult<Self::Output>, DecodeError> {
+        AndroidAudioDecoder::receive(self).map_err(|error| error.into_decode_error())
+    }
+    fn submit(&mut self, input: DecodeInput) -> Result<SubmitResult, DecodeError> {
+        AndroidAudioDecoder::submit(self, input).map_err(|error| error.into_decode_error())
+    }
 }
 
 fn input_time_us(timestamp: Timestamp) -> Result<u64, AndroidDecoderError> {
     if timestamp.ticks() < 0 {
         return Err(AndroidDecoderError::UnsupportedInputTimestamp { timestamp });
     }
-    let time_base = TimeBase::new(1, 1_000_000).expect("msg");
-    let new_timestamp = timestamp
-        .rescale(time_base, Rounding::TowardZero)
+    let microsecond_time_base = TimeBase::new(1, 1_000_000).expect("msg");
+    let timestamp_us = timestamp
+        .rescale(microsecond_time_base, Rounding::TowardZero)
         .map_err(|error| AndroidDecoderError::TimeConversion { reason: error })?;
-    let ticks = new_timestamp.ticks() as u64;
+    let ticks = timestamp_us.ticks() as u64;
     Ok(ticks)
 }

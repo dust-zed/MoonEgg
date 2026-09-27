@@ -6,10 +6,11 @@ use std::{
 };
 
 use ndk_sys::{
-    AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM, AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED,
-    AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED, AMEDIACODEC_INFO_TRY_AGAIN_LATER, AMediaCodec,
-    AMediaCodec_configure, AMediaCodec_createDecoderByType, AMediaCodec_delete,
-    AMediaCodec_dequeueInputBuffer, AMediaCodec_dequeueOutputBuffer, AMediaCodec_getInputBuffer,
+    AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG, AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM,
+    AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED, AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED,
+    AMEDIACODEC_INFO_TRY_AGAIN_LATER, AMediaCodec, AMediaCodec_configure,
+    AMediaCodec_createDecoderByType, AMediaCodec_delete, AMediaCodec_dequeueInputBuffer,
+    AMediaCodec_dequeueOutputBuffer, AMediaCodec_flush, AMediaCodec_getInputBuffer,
     AMediaCodec_getOutputBuffer, AMediaCodec_getOutputFormat, AMediaCodec_queueInputBuffer,
     AMediaCodec_releaseOutputBuffer, AMediaCodec_start, AMediaCodecBufferInfo, media_status_t,
 };
@@ -46,6 +47,8 @@ pub(crate) enum MediaCodecError {
     NullOutputBuffer { index: usize },
     #[error("")]
     ReleaseOutputFailed { status: i32 },
+    #[error("")]
+    FlushFailed { status: i32 },
 }
 
 #[derive(Debug)]
@@ -97,6 +100,7 @@ pub(crate) struct NativeMediaCodec {
     pending_output: Option<PendingOutput>,
     // 已经取得并处理了带 EOS 标记的输出槽位
     output_eos_seen: bool,
+    output_started: bool,
 }
 
 impl NativeMediaCodec {
@@ -116,6 +120,7 @@ impl NativeMediaCodec {
             input_eos_queued: false,
             pending_output: None,
             output_eos_seen: false,
+            output_started: false,
         };
 
         let status = unsafe {
@@ -166,57 +171,14 @@ impl NativeMediaCodec {
         data: &[u8],
         presentation_time_us: u64,
     ) -> Result<InputQueueResult, MediaCodecError> {
-        if self.failed || self.input_eos_queued {
-            return Err(MediaCodecError::InvalidState);
-        }
-        if data.is_empty() {
-            return Err(MediaCodecError::EmptyInput);
-        }
+        self.try_queue_bytes(data, presentation_time_us, 0)
+    }
 
-        let Some(input_index) = self.ensure_input_buffer()? else {
-            return Ok(InputQueueResult::WouldBlock);
-        };
-
-        let mut buffer_capacity = 0usize;
-        let raw_buffer = unsafe {
-            AMediaCodec_getInputBuffer(self.inner.as_ptr(), input_index, &mut buffer_capacity)
-        };
-
-        if raw_buffer.is_null() {
-            self.failed = true;
-            return Err(MediaCodecError::NullInputBuffer { index: input_index });
-        }
-
-        if data.len() > buffer_capacity {
-            return Err(MediaCodecError::InputBufferTooSmall {
-                required: data.len(),
-                capacity: buffer_capacity,
-            });
-        }
-        // SAFETY:
-        // data 是有效的源切片
-        // raw_buffer 属于当前已取得、尚未提交的输入槽位
-        // 已确认指针非空，且容量足以容纳 data.len() 个字节。
-        // 源数据与平台缓冲区不重叠， u8 的对齐要求为 1
-        unsafe {
-            std::ptr::copy_nonoverlapping(data.as_ptr(), raw_buffer, data.len());
-        };
-        let status = unsafe {
-            AMediaCodec_queueInputBuffer(
-                self.inner.as_ptr(),
-                input_index,
-                0,
-                data.len(),
-                presentation_time_us,
-                0,
-            )
-        };
-        if status != media_status_t::AMEDIA_OK {
-            self.failed = true;
-            return Err(MediaCodecError::QueueInputFailed { status: status.0 });
-        }
-        self.pending_input_index = None;
-        Ok(InputQueueResult::Queued)
+    pub(crate) fn try_queue_codec_config(
+        &mut self,
+        codec_config: &[u8],
+    ) -> Result<InputQueueResult, MediaCodecError> {
+        self.try_queue_bytes(codec_config, 0, AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG)
     }
 
     pub(crate) fn try_queue_eos(&mut self) -> Result<InputQueueResult, MediaCodecError> {
@@ -246,6 +208,61 @@ impl NativeMediaCodec {
         Ok(InputQueueResult::Queued)
     }
 
+    fn try_queue_bytes(
+        &mut self,
+        data: &[u8],
+        presentation_time_us: u64,
+        flags: u32,
+    ) -> Result<InputQueueResult, MediaCodecError> {
+        if self.failed || self.input_eos_queued {
+            return Err(MediaCodecError::InvalidState);
+        }
+        if data.is_empty() {
+            return Err(MediaCodecError::EmptyInput);
+        }
+        let Some(input_index) = self.ensure_input_buffer()? else {
+            return Ok(InputQueueResult::WouldBlock);
+        };
+        let mut buffer_capacity = 0usize;
+        let raw_buffer = unsafe {
+            AMediaCodec_getInputBuffer(self.inner.as_ptr(), input_index, &mut buffer_capacity)
+        };
+
+        if raw_buffer.is_null() {
+            self.failed = true;
+            return Err(MediaCodecError::NullInputBuffer { index: input_index });
+        }
+
+        if data.len() > buffer_capacity {
+            return Err(MediaCodecError::InputBufferTooSmall {
+                required: data.len(),
+                capacity: buffer_capacity,
+            });
+        }
+
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), raw_buffer, data.len());
+        };
+
+        let status = unsafe {
+            AMediaCodec_queueInputBuffer(
+                self.inner.as_ptr(),
+                input_index,
+                0,
+                data.len(),
+                presentation_time_us,
+                flags,
+            )
+        };
+        if status != media_status_t::AMEDIA_OK {
+            self.failed = true;
+            return Err(MediaCodecError::QueueInputFailed { status: status.0 });
+        }
+
+        self.pending_input_index = None;
+        Ok(InputQueueResult::Queued)
+    }
+
     fn ensure_output_buffer(&mut self) -> Result<OutputPoll, MediaCodecError> {
         if self.failed {
             return Err(MediaCodecError::InvalidState);
@@ -266,6 +283,7 @@ impl NativeMediaCodec {
             return Ok(OutputPoll::NotReady);
         }
         if raw_index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED as isize {
+            self.output_started = true;
             return Ok(OutputPoll::FormatChanged);
         }
         if raw_index == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED as isize {
@@ -276,6 +294,7 @@ impl NativeMediaCodec {
             return Err(MediaCodecError::DequeueOutputFailed { status: raw_index });
         }
         let output_index = raw_index as usize;
+        self.output_started = true;
         self.pending_output = Some(PendingOutput {
             index: output_index,
             info: buffer_info,
@@ -351,6 +370,10 @@ impl NativeMediaCodec {
         })
     }
 
+    pub(crate) fn has_output_started(&self) -> bool {
+        self.output_started
+    }
+
     pub(crate) fn try_receive(&mut self) -> Result<CodecOutput, MediaCodecError> {
         if self.failed {
             return Err(MediaCodecError::InvalidState);
@@ -381,6 +404,22 @@ impl NativeMediaCodec {
                 }
             }
         }
+    }
+
+    pub(crate) fn flush(&mut self) -> Result<(), MediaCodecError> {
+        if self.failed {
+            return Err(MediaCodecError::InvalidState);
+        }
+        let status = unsafe { AMediaCodec_flush(self.inner.as_ptr()) };
+        if status != media_status_t::AMEDIA_OK {
+            self.failed = true;
+            return Err(MediaCodecError::FlushFailed { status: status.0 });
+        }
+        self.pending_input_index = None;
+        self.pending_output = None;
+        self.input_eos_queued = false;
+        self.output_eos_seen = false;
+        Ok(())
     }
 }
 
