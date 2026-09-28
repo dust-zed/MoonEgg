@@ -3,9 +3,9 @@ use std::fs::File;
 use crate::{
     backends::{pcm::PcmDecoder, wav::WavDemuxer},
     error::PlaybackError,
-    media::TrackFormat,
+    media::{AudioPcmFormat, AudioSampleFormat, TrackFormat},
     pipeline::PlaybackPipelineError,
-    ports::{AudioOutputFactory, DemuxError},
+    ports::{AudioOutputFactory, DecodeError, DemuxError},
     runtime::{AudioPipelineFactory, CancellationToken},
     source::{BoundedReader, FileSource},
 };
@@ -52,16 +52,26 @@ where
     ) -> Result<(Self::Decode, Self::Output), PlaybackError> {
         Self::check_canceled(cancel)?;
 
-        let TrackFormat::Audio(format) = track.format() else {
+        let TrackFormat::Audio(track_format) = track.format() else {
             return Err(PlaybackError::Pipeline(PlaybackPipelineError::NoAudioTrack));
         };
 
-        let decoder = PcmDecoder::new(track.id(), format.clone()).map_err(PlaybackError::Decode)?;
+        let decoder =
+            PcmDecoder::new(track.id(), track_format.clone()).map_err(PlaybackError::Decode)?;
         Self::check_canceled(cancel)?;
+
+        // PcmDecoder 构造成功，已确认轨道是当前支持的 PCM S16LE。
+        // 该解码路径输出 I16，并保留轨道采样率和声道数。
+        let pcm_format = AudioPcmFormat::new(
+            track_format.sample_rate(),
+            track_format.channel_count(),
+            AudioSampleFormat::I16,
+        )
+        .map_err(|_| PlaybackError::Decode(DecodeError::InvalidData))?;
 
         let output = self
             .output_factory
-            .create(format)
+            .create(&pcm_format)
             .map_err(PlaybackError::AudioOutput)?;
         Self::check_canceled(cancel)?;
 

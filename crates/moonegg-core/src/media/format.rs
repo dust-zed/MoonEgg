@@ -91,3 +91,54 @@ pub enum TrackFormat {
     Audio(AudioTrackFormat),
     Video(VideoTrackFormat),
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioSampleFormat {
+    I16,
+    F32,
+}
+
+#[derive(Debug)]
+pub enum AudioPcmFormatError {
+    InvalidSampleRate { sample_rate: u32 },
+    InvalidChannelCount { channel_count: u16 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudioPcmFormat {
+    sample_rate: u32,
+    channel_count: u16,
+    sample_format: AudioSampleFormat,
+}
+
+impl AudioPcmFormat {
+    pub fn new(
+        sample_rate: u32,
+        channel_count: u16,
+        format: AudioSampleFormat,
+    ) -> Result<Self, AudioPcmFormatError> {
+        if sample_rate == 0 {
+            return Err(AudioPcmFormatError::InvalidSampleRate { sample_rate });
+        }
+        if channel_count == 0 {
+            return Err(AudioPcmFormatError::InvalidChannelCount { channel_count });
+        }
+        Ok(Self {
+            sample_rate,
+            channel_count,
+            sample_format: format,
+        })
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    pub fn channel_count(&self) -> u16 {
+        self.channel_count
+    }
+
+    pub fn sample_format(&self) -> AudioSampleFormat {
+        self.sample_format
+    }
+}

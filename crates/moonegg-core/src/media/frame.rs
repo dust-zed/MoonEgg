@@ -1,6 +1,9 @@
 //! 解码后的媒体帧及其呈现时间
 
-use crate::media::{MediaTime, TrackId};
+use crate::media::{
+    MediaTime, TrackId,
+    format::{AudioPcmFormat, AudioPcmFormatError, AudioSampleFormat},
+};
 
 /// type AudioFrame = DecodedFrame<pcmBuffer>
 /// type SoftwareVideoFrame = DecodedFrame<YuvBuffer>
@@ -59,12 +62,18 @@ impl AudioSamples {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    pub fn sample_format(&self) -> AudioSampleFormat {
+        match self {
+            Self::F32(_) => AudioSampleFormat::F32,
+            Self::I16(_) => AudioSampleFormat::I16,
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct AudioBuffer {
-    sample_rate: u32,
-    channel_count: u16,
+    format: AudioPcmFormat,
     samples: AudioSamples,
 }
 
@@ -81,23 +90,35 @@ impl AudioBuffer {
         if channel_count == 0 {
             return Err(AudioBufferError::InvalidChannelCount);
         }
+        let sample_format = samples.sample_format();
+        let format =
+            AudioPcmFormat::new(sample_rate, channel_count, sample_format).map_err(|error| {
+                match error {
+                    AudioPcmFormatError::InvalidChannelCount { .. } => {
+                        AudioBufferError::InvalidChannelCount
+                    }
+                    AudioPcmFormatError::InvalidSampleRate { .. } => {
+                        AudioBufferError::InvalidSampleRate
+                    }
+                }
+            })?;
 
         if !samples.len().is_multiple_of(usize::from(channel_count)) {
             return Err(AudioBufferError::IncompleteFrame);
         }
 
-        Ok(AudioBuffer {
-            sample_rate,
-            channel_count,
-            samples,
-        })
+        Ok(AudioBuffer { format, samples })
     }
-    pub const fn sample_rate(&self) -> u32 {
-        self.sample_rate
+    pub fn sample_rate(&self) -> u32 {
+        self.format.sample_rate()
     }
 
-    pub const fn channel_count(&self) -> u16 {
-        self.channel_count
+    pub fn channel_count(&self) -> u16 {
+        self.format.channel_count()
+    }
+
+    pub fn format(&self) -> AudioPcmFormat {
+        self.format
     }
 
     pub fn samples(&self) -> &AudioSamples {
@@ -109,7 +130,7 @@ impl AudioBuffer {
     }
 
     pub fn frame_count(&self) -> usize {
-        self.sample_count() / self.channel_count as usize
+        self.sample_count() / self.channel_count() as usize
     }
 }
 

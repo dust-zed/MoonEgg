@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use moonegg_core::{
-    media::{AudioBuffer, AudioSamples, AudioTrackFormat, DecodedFrame},
+    media::{AudioBuffer, AudioPcmFormat, AudioSampleFormat, AudioSamples, DecodedFrame},
     ports::{
         AudioOutput, AudioOutputError, AudioOutputFactory, AudioPlaybackPosition, AudioSubmitResult,
     },
@@ -18,7 +18,7 @@ impl AudioOutputFactory for AndroidAudioOutputFactory {
 
     fn create(
         &self,
-        format: &moonegg_core::media::AudioTrackFormat,
+        format: &AudioPcmFormat,
     ) -> Result<Self::Output, moonegg_core::ports::AudioOutputError> {
         AndroidAudioOutput::new(format)
     }
@@ -41,7 +41,11 @@ impl AndroidAudioOutput {
     // 当前 WAV 解码块是 1024 帧；这里给单块设置明确上限
     const MAX_BLOCK_FRAMES: usize = 4096;
 
-    fn new(format: &AudioTrackFormat) -> Result<Self, AudioOutputError> {
+    fn new(format: &AudioPcmFormat) -> Result<Self, AudioOutputError> {
+        // 当前 AAudioPcmStream 只支持写入 I16。
+        if format.sample_format() != AudioSampleFormat::I16 {
+            return Err(AudioOutputError::InvalidFormat);
+        }
         let stream = AAudioPcmStream::new(format.sample_rate(), format.channel_count())
             .map_err(map_error)?;
 

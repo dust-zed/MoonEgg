@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use crate::{
-    media::{AudioBuffer, AudioSamples, DecodedFrame},
+    media::{AudioBuffer, AudioPcmFormat, AudioSampleFormat, AudioSamples, DecodedFrame},
     ports::{
         AudioOutput, AudioOutputError, AudioOutputFactory, AudioPlaybackPosition, AudioSubmitResult,
     },
@@ -165,10 +165,10 @@ impl SimulatedAudioOutputFactory {
 
 impl AudioOutputFactory for SimulatedAudioOutputFactory {
     type Output = SimulatedAudioOutput;
-    fn create(
-        &self,
-        format: &crate::media::AudioTrackFormat,
-    ) -> Result<Self::Output, AudioOutputError> {
+    fn create(&self, format: &AudioPcmFormat) -> Result<Self::Output, AudioOutputError> {
+        if format.sample_format() != AudioSampleFormat::I16 {
+            return Err(AudioOutputError::InvalidFormat);
+        }
         SimulatedAudioOutput::new(
             format.sample_rate(),
             format.channel_count(),
