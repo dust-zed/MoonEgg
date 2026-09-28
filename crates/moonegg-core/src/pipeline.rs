@@ -2,6 +2,7 @@
 //! 队列、背压、EOS、flush、seek epoch、数据流协调
 mod audio;
 mod coordinator;
+mod deferred_audio_output;
 mod epoch;
 mod playback;
 mod queue;

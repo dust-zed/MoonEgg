@@ -31,6 +31,7 @@ struct PendingPcm {
 
 pub struct AndroidAudioOutput {
     stream: AAudioPcmStream,
+    format: AudioPcmFormat,
     pending: Option<PendingPcm>,
 
     running: bool,
@@ -51,6 +52,7 @@ impl AndroidAudioOutput {
 
         Ok(Self {
             stream,
+            format: *format,
             pending: None,
             running: false,
             request_started: false,
@@ -60,10 +62,7 @@ impl AndroidAudioOutput {
     fn validate(&self, frame: &DecodedFrame<AudioBuffer>) -> Result<(), AudioOutputError> {
         let buffer = frame.payload();
 
-        if buffer.sample_rate() != self.stream.sample_rate()
-            || buffer.channel_count() != self.stream.channels()
-            || !matches!(buffer.samples(), AudioSamples::I16(_))
-        {
+        if buffer.format() != self.format {
             return Err(AudioOutputError::InvalidFormat);
         }
 
@@ -179,6 +178,10 @@ impl AudioOutput for AndroidAudioOutput {
 
         let (consumed, written) = self.stream.frame_counters().map_err(map_error)?;
         Ok(self.pending.is_none() && consumed >= written)
+    }
+
+    fn format(&self) -> Option<AudioPcmFormat> {
+        Some(self.format)
     }
 }
 

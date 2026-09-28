@@ -1,5 +1,5 @@
 use crate::{
-    media::{AudioBuffer, DecodedFrame, Packet, TrackId},
+    media::{AudioBuffer, AudioPcmFormat, DecodedFrame, Packet, TrackId},
     pipeline::{BoundedQueue, EpochItem, PlaybackEpoch, QueueError, QueuePushResult},
     ports::{
         AudioOutput, AudioOutputError, AudioPlaybackPosition, AudioSubmitResult, DecodeError,
@@ -276,5 +276,9 @@ where
         }
 
         self.output.is_drained().map_err(AudioPipelineError::Output)
+    }
+
+    pub fn output_format(&self) -> Option<AudioPcmFormat> {
+        self.output.format()
     }
 }
