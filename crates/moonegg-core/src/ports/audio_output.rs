@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use crate::media::{AudioBuffer, DecodedFrame};
+use crate::media::{AudioBuffer, AudioPcmFormat, DecodedFrame};
 
 #[derive(Debug)]
 pub enum AudioSubmitResult {
@@ -60,4 +60,8 @@ pub trait AudioOutput {
     fn playback_position(&mut self) -> Result<AudioPlaybackPosition, AudioOutputError>;
 
     fn is_drained(&mut self) -> Result<bool, AudioOutputError>;
+
+    /// 返回输出端接收的 PCM 格式；None 表示尚未确定。
+    /// 暂停和清空缓冲不改变已经确定的格式。
+    fn format(&self) -> Option<AudioPcmFormat>;
 }

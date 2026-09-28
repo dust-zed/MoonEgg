@@ -1,16 +1,14 @@
 use std::time::Instant;
 
 use crate::{
-    media::{AudioBuffer, AudioPcmFormat, AudioSampleFormat, AudioSamples, DecodedFrame},
+    media::{AudioBuffer, AudioPcmFormat, AudioSampleFormat, DecodedFrame},
     ports::{
         AudioOutput, AudioOutputError, AudioOutputFactory, AudioPlaybackPosition, AudioSubmitResult,
     },
-    runtime::AudioPipelineFactory,
 };
 
 pub(crate) struct SimulatedAudioOutput {
-    sample_rate: u32,
-    channels: u16,
+    format: AudioPcmFormat,
 
     capacity_frames: u64,
     buffered_frames: u64,
@@ -23,11 +21,12 @@ pub(crate) struct SimulatedAudioOutput {
 
 impl SimulatedAudioOutput {
     pub(crate) fn new(
-        sample_rate: u32,
-        channels: u16,
+        format: AudioPcmFormat,
         capacity_frames: u64,
     ) -> Result<Self, AudioOutputError> {
-        if sample_rate == 0 || !matches!(channels, 1 | 2) {
+        if format.sample_format() != AudioSampleFormat::I16
+            || !matches!(format.channel_count(), 1 | 2)
+        {
             return Err(AudioOutputError::InvalidFormat);
         }
 
@@ -36,8 +35,7 @@ impl SimulatedAudioOutput {
         }
 
         Ok(Self {
-            sample_rate,
-            channels,
+            format,
             capacity_frames,
             buffered_frames: 0,
             played_frames: 0,
@@ -56,7 +54,7 @@ impl SimulatedAudioOutput {
             .ok_or(AudioOutputError::InvalidState)?;
 
         let scaled_frames =
-            elapsed.as_nanos() * u128::from(self.sample_rate) + self.frame_remainder;
+            elapsed.as_nanos() * u128::from(self.format.sample_rate()) + self.frame_remainder;
 
         // 根据经过的时间，现在应该消费多少个 audio frame。
         let due_frames = scaled_frames / 1_000_000_000;
@@ -91,10 +89,7 @@ impl AudioOutput for SimulatedAudioOutput {
 
         let buffer = frame.payload();
 
-        if buffer.sample_rate() != self.sample_rate
-            || buffer.channel_count() != self.channels
-            || !matches!(buffer.samples(), AudioSamples::I16(_))
-        {
+        if buffer.format() != self.format {
             return Err(AudioOutputError::InvalidFormat);
         }
 
@@ -151,6 +146,10 @@ impl AudioOutput for SimulatedAudioOutput {
 
         Ok(self.buffered_frames == 0)
     }
+
+    fn format(&self) -> Option<AudioPcmFormat> {
+        Some(self.format)
+    }
 }
 
 pub(crate) struct SimulatedAudioOutputFactory {
@@ -166,13 +165,6 @@ impl SimulatedAudioOutputFactory {
 impl AudioOutputFactory for SimulatedAudioOutputFactory {
     type Output = SimulatedAudioOutput;
     fn create(&self, format: &AudioPcmFormat) -> Result<Self::Output, AudioOutputError> {
-        if format.sample_format() != AudioSampleFormat::I16 {
-            return Err(AudioOutputError::InvalidFormat);
-        }
-        SimulatedAudioOutput::new(
-            format.sample_rate(),
-            format.channel_count(),
-            self.capacity_frames,
-        )
+        SimulatedAudioOutput::new(*format, self.capacity_frames)
     }
 }
