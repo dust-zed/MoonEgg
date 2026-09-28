@@ -1,10 +1,10 @@
 use crate::{
-    media::AudioTrackFormat,
+    media::AudioPcmFormat,
     ports::{AudioOutput, AudioOutputError},
 };
 
 pub trait AudioOutputFactory: Send + Sync + 'static {
     type Output: AudioOutput + 'static;
 
-    fn create(&self, format: &AudioTrackFormat) -> Result<Self::Output, AudioOutputError>;
+    fn create(&self, format: &AudioPcmFormat) -> Result<Self::Output, AudioOutputError>;
 }

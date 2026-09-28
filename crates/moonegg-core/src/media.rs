@@ -6,7 +6,10 @@ mod packet;
 mod time;
 mod track;
 
-pub use format::{AudioCodecId, AudioTrackFormat, TrackFormat, VideoCodecId, VideoTrackFormat};
+pub use format::{
+    AudioCodecId, AudioPcmFormat, AudioPcmFormatError, AudioSampleFormat, AudioTrackFormat,
+    TrackFormat, VideoCodecId, VideoTrackFormat,
+};
 pub use frame::{AudioBuffer, AudioBufferError, AudioSamples, DecodedFrame};
 pub use packet::Packet;
 pub use time::{MediaDelta, MediaTime, Rounding, TimeBase, TimeError, TimeSpan, Timestamp};
