@@ -11,11 +11,11 @@ use std::{
 use crate::{
     backends::{SimulatedAudioOutputFactory, WavPlaybackFactory},
     player::{PlayerCommand, PlayerEvent},
-    ports::AudioOutputFactory,
+    ports::{AudioBackendFactory, AudioOutputFactory},
     runtime::{
-        AudioPipelineFactory, ControlLoop, ControlLoopExit, ControlMessage, ControlResult,
-        EffectExecutor, EffectLoopExit, PlaybackEffectExecutor, ShutdownReport, ThreadTermination,
-        run_effect_loop,
+        AudioPipelineFactory, BackendPlaybackFactory, ControlLoop, ControlLoopExit, ControlMessage,
+        ControlResult, EffectExecutor, EffectLoopExit, PlaybackEffectExecutor, ShutdownReport,
+        ThreadTermination, run_effect_loop,
     },
     source::FileSource,
 };
@@ -84,6 +84,15 @@ impl PlayerEngine {
 
     pub fn new_wav_simulated(path: PathBuf) -> io::Result<Self> {
         Self::new_wav(path, SimulatedAudioOutputFactory::new(4096))
+    }
+
+    pub fn new_with_backend<B, F>(backend: B, output_factory: F) -> io::Result<Self>
+    where
+        B: AudioBackendFactory,
+        F: AudioOutputFactory,
+    {
+        let factory = BackendPlaybackFactory::new(backend, output_factory);
+        Self::new_audio(factory)
     }
 
     pub fn send_command(&self, command: PlayerCommand) -> Result<(), SendError<ControlMessage>> {

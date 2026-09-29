@@ -39,3 +39,14 @@ pub use audio_output::{AndroidAudioOutput, AndroidAudioOutputFactory};
 
 #[cfg(target_os = "android")]
 pub use file_source::duplicate_file_descriptor;
+#[cfg(target_os = "android")]
+use moonegg_core::PlayerEngine;
+
+#[cfg(target_os = "android")]
+pub fn new_aac_player(
+    source: moonegg_core::FileSource,
+) -> std::io::Result<moonegg_core::PlayerEngine> {
+    let backend_factory = audio_backend_factory::AndroidAudioBackendFactory::new(source);
+    let engine = PlayerEngine::new_with_backend(backend_factory, AndroidAudioOutputFactory)?;
+    Ok(engine)
+}
