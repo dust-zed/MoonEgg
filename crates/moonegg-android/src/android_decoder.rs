@@ -15,25 +15,25 @@ use crate::{
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum AndroidDecoderError {
-    #[error("")]
+    #[error("构造音频解码格式失败：{source}")]
     Format { source: DecoderFormatError },
-    #[error("")]
+    #[error("音频编解码器调用失败：{source}")]
     Codec { source: MediaCodecError },
-    #[error("")]
+    #[error("处理解码后的 PCM 失败：{source}")]
     Pcm { source: PcmOutputError },
-    #[error("")]
+    #[error("收到 PCM 数据时尚未取得解码器输出格式")]
     MissingOutputFormat,
-    #[error("")]
+    #[error("时间戳计算超出支持范围：time_us={time_us} μs")]
     TimestampOutOfRange { time_us: i64 },
-    #[error("")]
+    #[error("音频解码器状态不允许此操作，或时间戳映射尚未建立")]
     InvalidState,
-    #[error("")]
+    #[error("编码包轨道不匹配：expected={expected:?}, actual={actual:?}")]
     UnexpectedTrack { expected: TrackId, actual: TrackId },
-    #[error("")]
+    #[error("音频编码包缺少 PTS")]
     MissingPts,
-    #[error("")]
+    #[error("音频时间戳换算失败：{reason:?}")]
     TimeConversion { reason: TimeError },
-    #[error("")]
+    #[error("输入时间戳无法映射到当前解码器时间区间：{timestamp:?}")]
     UnsupportedInputTimestamp { timestamp: Timestamp },
 }
 

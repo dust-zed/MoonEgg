@@ -4,22 +4,22 @@ use crate::media_format::{MediaFormatError, NativeMediaFormat};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PcmOutputError {
-    #[error("")]
+    #[error("读取 PCM 输出格式失败：{source}")]
     Format { source: MediaFormatError },
-    #[error("")]
+    #[error("PCM 输出格式缺少必要字段：{field}")]
     MissingField { field: &'static str },
-    #[error("")]
+    #[error("PCM 输出格式的字段值无效：{field}={value}")]
     InvalidField { field: &'static str, value: i32 },
-    #[error("")]
+    #[error("解码器输出不是原始 PCM：mime={mime}")]
     UnsupportedMime { mime: String },
-    #[error("")]
+    #[error("不支持的 PCM 样本编码：encoding={encoding}")]
     UnsupportedEncoding { encoding: i32 },
-    #[error("")]
+    #[error("PCM 数据未按采样帧对齐：byte_len={byte_len}，bytes_per_frame={bytes_per_frame}")]
     InvalidPcmLength {
         byte_len: usize,
         bytes_per_frame: usize,
     },
-    #[error("")]
+    #[error("构造 PCM 缓冲区失败：{reason:?}")]
     InvalidAudioBuffer { reason: AudioBufferError },
 }
 #[derive(Debug)]

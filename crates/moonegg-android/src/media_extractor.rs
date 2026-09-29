@@ -15,7 +15,7 @@ use crate::media_format::NativeMediaFormat;
 pub(crate) enum MediaExtractorError {
     #[error("非法的文件范围, start {start:?}, length {length:?}")]
     InvalidSourceRange { start: u64, length: u64 },
-    #[error("创建失败")]
+    #[error("创建 MediaExtractor 失败")]
     CreateFailed,
     #[error("设置数据源出错： {status:?}")]
     SetDataSourceFailed { status: i32 },
@@ -26,15 +26,15 @@ pub(crate) enum MediaExtractorError {
     },
     #[error("未能取得Track format: {track_index}")]
     GetTrackFormatFailed { track_index: usize },
-    #[error("")]
+    #[error("选择媒体轨道失败：track_index={track_index}, status={status}")]
     SelectTrackFailed { track_index: usize, status: i32 },
-    #[error("")]
+    #[error("读取当前编码样本失败，或已无可读取的样本")]
     ReadSampleFailed,
-    #[error("")]
+    #[error("样本读取长度超过目标缓冲区容量：size={size} 字节，capacity={capacity} 字节")]
     InvalidReadSize { size: usize, capacity: usize },
-    #[error("")]
+    #[error("seek 目标不能为负数：target_us={target_us} μs")]
     InvalidSeekTarget { target_us: i64 },
-    #[error("")]
+    #[error("MediaExtractor seek 失败：target_us={target_us} μs, status={status}")]
     SeekFailed { target_us: i64, status: i32 },
 }
 
@@ -57,6 +57,7 @@ impl NativeMediaExtractor {
         let offset = start as i64;
         let size = length as i64;
 
+        // SAFETY: 此创建函数没有指针参数；返回值随后检查非空并交给 Drop 管理。
         let raw = unsafe { AMediaExtractor_new() };
         let inner = NonNull::new(raw).ok_or(MediaExtractorError::CreateFailed)?;
 
@@ -80,6 +81,8 @@ impl NativeMediaExtractor {
     }
 
     pub(crate) fn track_count(&self) -> usize {
+        // SAFETY: self 持有尚未释放的 extractor；句柄不暴露给外部，
+        // 查询期间没有其他线程或别名修改、释放它。
         unsafe { AMediaExtractor_getTrackCount(self.inner.as_ptr()) }
     }
 
@@ -96,9 +99,13 @@ impl NativeMediaExtractor {
             });
         }
 
+        // SAFETY: extractor 有效，track_index 已检查小于轨道总数。
+        // 平台返回的格式对象由调用方负责释放。
         let raw_format =
             unsafe { AMediaExtractor_getTrackFormat(self.inner.as_ptr(), track_index) };
 
+        // SAFETY: raw_format 是本次查询返回的新拥有对象或空指针；
+        // 此处只移交一次所有权，之后由 NativeMediaFormat 释放。
         let track_format = unsafe { NativeMediaFormat::from_owned_raw(raw_format) }
             .ok_or(MediaExtractorError::GetTrackFormatFailed { track_index })?;
 
@@ -186,7 +193,7 @@ impl NativeMediaExtractor {
     }
 
     pub(crate) fn sample_flags(&self) -> u32 {
-        //SAFETY:
+        // SAFETY:
         // extractor 有效且未释放
         unsafe { AMediaExtractor_getSampleFlags(self.inner.as_ptr()) }
     }
@@ -224,6 +231,8 @@ impl NativeMediaExtractor {
 
 impl Drop for NativeMediaExtractor {
     fn drop(&mut self) {
+        // SAFETY: 本对象唯一拥有有效 extractor，当前没有进行中的平台调用。
+        // 持有的 File 此时仍存活；删除 extractor 后再由字段析构关闭文件。
         unsafe { AMediaExtractor_delete(self.inner.as_ptr()) };
     }
 }

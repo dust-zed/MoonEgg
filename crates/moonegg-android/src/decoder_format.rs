@@ -6,15 +6,15 @@ use crate::media_format::{MediaFormatError, NativeMediaFormat};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum DecoderFormatError {
-    #[error("")]
+    #[error("AAC 解码器不支持此编码格式：{codec:?}")]
     UnsupportedCodec { codec: AudioCodecId },
-    #[error("")]
+    #[error("解码采样率必须为正数且可表示为 i32：sample_rate={sample_rate} Hz")]
     InvalidSampleRate { sample_rate: u32 },
-    #[error("")]
+    #[error("解码声道数必须大于零：channel_count={channel_count}")]
     InvalidChannelCount { channel_count: u16 },
-    #[error("")]
+    #[error("AAC 解码初始化配置 csd-0 为空")]
     EmptyCodecConfig,
-    #[error("")]
+    #[error("创建解码器 MediaFormat 失败：{source}")]
     Format { source: MediaFormatError },
 }
 

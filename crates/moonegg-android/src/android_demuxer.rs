@@ -58,29 +58,29 @@ fn map_probe_error(error: TrackProbeError) -> DemuxError {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum AndroidDemuxerError {
-    #[error("")]
+    #[error("媒体提取器调用失败：{source}")]
     Extractor { source: MediaExtractorError },
-    #[error("")]
+    #[error("探测音频轨道失败：{source}")]
     Probe { source: TrackProbeError },
-    #[error("")]
+    #[error("媒体中没有可用的 AAC 轨道")]
     NoAacTrack,
-    #[error("")]
+    #[error("媒体提取器返回了未选中的轨道：track_index={track_index}")]
     UnexpectedTrack { track_index: usize },
-    #[error("")]
+    #[error("无法取得当前编码样本的大小")]
     MissingSampleSize,
-    #[error("")]
+    #[error("编码样本大小不在支持范围内：size={size} 字节，允许 1..={limit} 字节")]
     InvalidSampleSize { size: usize, limit: usize },
-    #[error("")]
+    #[error("无法取得当前编码样本的时间戳")]
     MissingSampleTime,
-    #[error("")]
+    #[error("当前解复用链路不支持加密样本")]
     EncryptedSample,
-    #[error("")]
+    #[error("编码样本读取长度不匹配：expected={expected} 字节，actual={actual} 字节")]
     SampleSizeMismatch { expected: usize, actual: usize },
-    #[error("")]
+    #[error("seek 目标不能为负数：target_ns={target_ns} ns")]
     InvalidSeekTarget { target_ns: i64 },
-    #[error("")]
+    #[error("seek 后没有可读取的编码样本")]
     NoSampleAfterSeek,
-    #[error("")]
+    #[error("seek 落点无法表示为纳秒时间：time_us={time_us} μs")]
     TimestampOutOfRange { time_us: i64 },
 }
 
