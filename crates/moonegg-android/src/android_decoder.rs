@@ -268,6 +268,9 @@ impl Decoder for AndroidAudioDecoder {
 }
 
 fn input_time_us(timestamp: Timestamp) -> Result<u64, AndroidDecoderError> {
+    // TODO: 支持负 PTS。当前先拒绝，后续设计解码器时间戳偏移、
+    // 输出时间戳还原及 seek/flush 行为；不能直接移除后续检查后 as u64。
+    // 回归样本: demo.m4a 的首包 PTS 为负
     if timestamp.ticks() < 0 {
         return Err(AndroidDecoderError::UnsupportedInputTimestamp { timestamp });
     }
