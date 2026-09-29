@@ -9,7 +9,7 @@ use crate::{
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum TrackProbeError {
-    #[error("获取轨道格式失败")]
+    #[error("获取轨道格式失败：{source}")]
     Extractor { source: MediaExtractorError },
     #[error("读取轨道{track_index}字段失败：{source}")]
     Format {
@@ -19,21 +19,21 @@ pub(crate) enum TrackProbeError {
     #[error("轨道{track_index}缺少有效 MIME")]
     MissingMime { track_index: usize },
 
-    #[error("")]
+    #[error("轨道 {track_index} 缺少必要字段：{field}")]
     MissingField {
         track_index: usize,
         field: &'static str,
     },
-    #[error("")]
+    #[error("轨道 {track_index} 的字段值无效：{field}={value}")]
     InvalidField {
         track_index: usize,
         field: &'static str,
         value: i64,
     },
 
-    #[error("")]
+    #[error("AAC 轨道的解码初始化配置 csd-0 为空")]
     EmptyCodecConfig,
-    #[error("")]
+    #[error("轨道索引无法表示为 TrackId：track_index={track_index}")]
     TrackIndexOutOfRange { track_index: usize },
 }
 

@@ -19,37 +19,39 @@ use crate::media_format::NativeMediaFormat;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum MediaCodecError {
-    #[error("")]
+    #[error("创建 MediaCodec 解码器失败")]
     CreateFailed,
-    #[error("")]
+    #[error("配置 MediaCodec 失败：status={status}")]
     ConfigureFailed { status: i32 },
-    #[error("")]
+    #[error("启动 MediaCodec 失败：status={status}")]
     StartFailed { status: i32 },
-    #[error("")]
+    #[error("申请 MediaCodec 输入槽位失败：status={status}")]
     DequeueInputFailed { status: isize },
-    #[error("")]
+    #[error("MediaCodec 状态不允许此操作，或所需缓冲区槽位尚未取得")]
     InvalidState,
-    #[error("")]
+    #[error("普通编码数据或解码配置不能为空；EOS 应通过专用入口提交")]
     EmptyInput,
-    #[error("")]
+    #[error("MediaCodec 输入槽位返回空指针：index={index}")]
     NullInputBuffer { index: usize },
-    #[error("")]
+    #[error("MediaCodec 输入缓冲区不足：required={required} 字节，capacity={capacity} 字节")]
     InputBufferTooSmall { required: usize, capacity: usize },
-    #[error("")]
+    #[error(
+        "MediaCodec 输出有效长度超过缓冲区容量：required={required} 字节，capacity={capacity} 字节"
+    )]
     OutputBufferTooSmall { required: usize, capacity: usize },
-    #[error("")]
+    #[error("提交 MediaCodec 输入槽位失败：status={status}")]
     QueueInputFailed { status: i32 },
-    #[error("")]
+    #[error("获取 MediaCodec 输出槽位失败：status={status}")]
     DequeueOutputFailed { status: isize },
-    #[error("")]
+    #[error("获取 MediaCodec 输出格式失败")]
     GetOutputFormatFailed,
-    #[error("")]
+    #[error("MediaCodec 输出有效长度不能为负数：size={size} 字节")]
     InvalidOutputSize { size: i32 },
-    #[error("")]
+    #[error("MediaCodec 输出槽位返回空指针：index={index}")]
     NullOutputBuffer { index: usize },
-    #[error("")]
+    #[error("归还 MediaCodec 输出槽位失败：status={status}")]
     ReleaseOutputFailed { status: i32 },
-    #[error("")]
+    #[error("清空 MediaCodec 缓冲区失败：status={status}")]
     FlushFailed { status: i32 },
 }
 
@@ -110,6 +112,8 @@ impl NativeMediaCodec {
         mime: &CStr,
         format: &NativeMediaFormat,
     ) -> Result<Self, MediaCodecError> {
+        // SAFETY: mime 是调用期间有效、以零字节结尾的 C 字符串。
+        // 返回的句柄随后检查非空，并由唯一的 NativeMediaCodec 管理。
         let raw_codec = unsafe { AMediaCodec_createDecoderByType(mime.as_ptr()) };
 
         let inner = NonNull::new(raw_codec).ok_or(MediaCodecError::CreateFailed)?;
@@ -125,6 +129,9 @@ impl NativeMediaCodec {
             output_started: false,
         };
 
+        // SAFETY: codec 刚创建且尚未配置，format 在调用期间有效。
+        // 当前为未加密音频的缓冲区输出模式，Surface 和 Crypto 均允许为空；
+        // flags=0 表示解码。此时句柄尚未向外暴露，不存在并发调用。
         let status = unsafe {
             AMediaCodec_configure(inner.as_ptr(), format.as_ptr(), null_mut(), null_mut(), 0)
         };
@@ -133,6 +140,7 @@ impl NativeMediaCodec {
             return Err(MediaCodecError::ConfigureFailed { status: status.0 });
         }
 
+        // SAFETY: codec 有效且 configure 已成功，尚未启动，无并发访问。
         let status = unsafe { AMediaCodec_start(codec.inner.as_ptr()) };
 
         if status != media_status_t::AMEDIA_OK {
@@ -190,6 +198,9 @@ impl NativeMediaCodec {
         let Some(input_index) = self.ensure_input_buffer()? else {
             return Ok(InputQueueResult::WouldBlock);
         };
+        // SAFETY: input_index 是本 codec 已取得且尚未提交的输入槽位。
+        // EOS 使用 offset=0、size=0，不读取数据；当前独占访问 codec。
+        // 成功后清除 pending_input_index，避免重复提交该槽位。
         let status = unsafe {
             AMediaCodec_queueInputBuffer(
                 self.inner.as_ptr(),
@@ -226,6 +237,8 @@ impl NativeMediaCodec {
             return Ok(InputQueueResult::WouldBlock);
         };
         let mut buffer_capacity = 0usize;
+        // SAFETY: input_index 是当前持有、尚未提交的输入槽位，codec 有效。
+        // buffer_capacity 是调用期间有效、可写的 usize 输出位置。
         let raw_buffer = unsafe {
             AMediaCodec_getInputBuffer(self.inner.as_ptr(), input_index, &mut buffer_capacity)
         };
@@ -242,10 +255,16 @@ impl NativeMediaCodec {
             });
         }
 
+        // SAFETY: raw_buffer 已确认非空，平台允许在提交前写入该输入槽位；
+        // data.len() 不超过平台报告的容量，源切片包含同样多的有效字节。
+        // 源数据由调用方持有，与 codec 私有输入缓冲区不重叠，u8 对齐要求为 1。
+        // 当前独占访问 codec，复制期间不会提交、flush 或释放槽位。
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr(), raw_buffer, data.len());
         };
 
+        // SAFETY: 当前持有该输入槽位，offset=0、size=data.len() 均在已检查的容量内，
+        // 对应字节已初始化。提交之后不再使用 raw_buffer，并在成功后清除槽位索引。
         let status = unsafe {
             AMediaCodec_queueInputBuffer(
                 self.inner.as_ptr(),
@@ -279,6 +298,8 @@ impl NativeMediaCodec {
             presentationTimeUs: 0,
             flags: 0,
         };
+        // SAFETY: codec 已启动且使用同步模式，当前独占访问。
+        // buffer_info 是调用期间有效、对齐且可写的输出结构；timeout=0 不阻塞等待。
         let raw_index =
             unsafe { AMediaCodec_dequeueOutputBuffer(self.inner.as_ptr(), &mut buffer_info, 0) };
         if raw_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
@@ -309,7 +330,11 @@ impl NativeMediaCodec {
             return Err(MediaCodecError::InvalidState);
         }
 
+        // SAFETY: codec 有效且未处于失败状态；当前独占访问。
+        // 平台返回独立的格式对象，所有权由调用方接管。
         let raw_format = unsafe { AMediaCodec_getOutputFormat(self.inner.as_ptr()) };
+        // SAFETY: raw_format 是本次调用返回的新拥有对象或空指针。
+        // 此处唯一接管所有权，不会通过原始指针另行释放。
         let format = unsafe { NativeMediaFormat::from_owned_raw(raw_format) }.ok_or_else(|| {
             self.failed = true;
             MediaCodecError::GetOutputFormatFailed
@@ -329,6 +354,8 @@ impl NativeMediaCodec {
         }
 
         let mut reported_capacity = 0usize;
+        // SAFETY: output_index 来自 pending_output，已出队且尚未归还或被 flush 失效。
+        // codec 仍存活，reported_capacity 是有效、可写的输出位置。
         let raw_buffer = unsafe {
             AMediaCodec_getOutputBuffer(self.inner.as_ptr(), output_index, &mut reported_capacity)
         };
@@ -344,6 +371,10 @@ impl NativeMediaCodec {
                 capacity: reported_capacity,
             });
         }
+        // SAFETY: 指针已确认非空，byte_len 不超过平台返回的容量；平台保证已出队
+        // 输出中的有效字节已初始化、位于同一缓冲区内，u8 对齐要求为 1。
+        // byte_len 来自非负 i32，在支持的 Android 32/64 位目标上不超过 isize::MAX。
+        // 复制完成前不会归还槽位、flush 或释放 codec；返回 Vec 后不保留平台内存借用。
         let buffer = unsafe { from_raw_parts(raw_buffer, byte_len) }.to_vec();
         Ok(buffer)
     }
@@ -358,6 +389,9 @@ impl NativeMediaCodec {
         let (output_index, buffer_info) = (pending_output.index, pending_output.info);
         let copy_result = self.copy_output_data(output_index, &buffer_info);
 
+        // SAFETY: output_index 是当前尚未归还的输出槽位，复制操作已经结束，
+        // 不再持有其内存借用；render=false 适用于当前音频缓冲区输出模式。
+        // 成功后清除 pending_output；失败则将 codec 标记为不可继续使用。
         let status =
             unsafe { AMediaCodec_releaseOutputBuffer(self.inner.as_ptr(), output_index, false) };
         if status != media_status_t::AMEDIA_OK {
@@ -419,6 +453,8 @@ impl NativeMediaCodec {
         if self.failed {
             return Err(MediaCodecError::InvalidState);
         }
+        // SAFETY: codec 已启动且当前独占访问，没有跨调用保存的平台内存引用。
+        // flush 会使已取得的槽位失效，成功后立即清空对应索引及 EOS 状态。
         let status = unsafe { AMediaCodec_flush(self.inner.as_ptr()) };
         if status != media_status_t::AMEDIA_OK {
             self.failed = true;

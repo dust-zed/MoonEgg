@@ -16,11 +16,11 @@ pub(crate) enum MediaFormatError {
     NullStringPointer,
     #[error("字符串无法严格转换为UTF-8")]
     InvalidUtf8,
-    #[error("")]
+    #[error("MediaFormat 返回了非零长度缓冲区的空指针")]
     NullBufferPointer,
-    #[error("")]
+    #[error("MediaFormat 缓冲区长度超出 Rust 切片支持范围：size={size} 字节")]
     InvalidBufferSize { size: usize },
-    #[error("")]
+    #[error("创建 MediaFormat 失败")]
     CreateFailed,
 }
 
@@ -29,16 +29,19 @@ pub(crate) struct NativeMediaFormat {
 }
 
 impl NativeMediaFormat {
-    /// # SAFETY:
-    /// 允许空指针；非空时必须有效且移交唯一所有权
-    ///  调用方必须拥有该对象，并将所有权交给此封装。
-    /// 移交后，调用方不能再释放它或另建一个拥有者
+    /// 接管平台返回的 MediaFormat；空指针返回 None。
+    ///
+    /// # Safety
+    /// 非空指针必须指向仍有效、可由 AMediaFormat_delete 释放的对象。
+    /// 调用方必须移交唯一所有权，之后不能再释放对象、使用旧别名访问对象，
+    /// 或将同一指针交给另一个拥有者。
     pub(crate) unsafe fn from_owned_raw(raw_format: *mut AMediaFormat) -> Option<Self> {
         let inner = NonNull::new(raw_format)?;
         Some(Self { inner })
     }
 
     pub(crate) fn new() -> Result<Self, MediaFormatError> {
+        // SAFETY: 此创建函数没有指针参数；返回值随后检查非空并接管所有权。
         let raw_format = unsafe { AMediaFormat_new() };
         // SAFETY：非空指针来自本次创建，尚未交给其他拥有者。
         unsafe { Self::from_owned_raw(raw_format) }.ok_or(MediaFormatError::CreateFailed)
@@ -61,8 +64,9 @@ impl NativeMediaFormat {
 
     pub(crate) fn set_buffer(&mut self, key: &CStr, data: &[u8]) {
         let data_len = data.len();
-        //    SAFETY：data 在调用期间有效，长度对应实际可读取范围。
-        //    平台复制数据，调用结束后不再依赖 data 的存储。
+        // SAFETY: self 持有有效格式对象，当前独占借用 self；key 是有效 C 字符串。
+        // data 在调用期间有效，长度对应实际可读取范围。
+        // 平台复制数据，调用结束后不再依赖 data 的存储。
         unsafe {
             AMediaFormat_setBuffer(
                 self.inner.as_ptr(),
@@ -78,7 +82,7 @@ impl NativeMediaFormat {
 
         // SAFETY:
         // self 持有有效且未释放的 AMediaFormat
-        // key 是有效的、以零字符串结尾的 C 字符串。
+        // key 是有效的、以零字节结尾的 C 字符串。
         // raw_value 的地址在调用期间有效，可以接收平台写入的指针。
         let found =
             unsafe { AMediaFormat_getString(self.inner.as_ptr(), key.as_ptr(), &mut raw_value) };
@@ -93,8 +97,8 @@ impl NativeMediaFormat {
 
         // SAFETY:
         // raw_value 来自成功的 NDK 字符串查询，并且已确认非空。
-        // 平台保证它指向有效的，以零字节结尾。
-        // self 仍然存活，且期间没有再次调用 getString
+        // 平台保证它指向有效的、以零字节结尾的字符串。
+        // self 仍然存活；复制成 String 前没有再次调用 getString 或修改格式对象。
         let borrowed_value = unsafe { CStr::from_ptr(raw_value) };
 
         let text = borrowed_value
@@ -109,6 +113,8 @@ impl NativeMediaFormat {
     pub(crate) fn get_i32(&mut self, key: &CStr) -> Option<i32> {
         let mut value = 0i32;
 
+        // SAFETY: self 持有有效格式对象，key 是有效 C 字符串；
+        // value 是调用期间独占、对齐且可写的 i32 输出位置。
         let found = unsafe { AMediaFormat_getInt32(self.inner.as_ptr(), key.as_ptr(), &mut value) };
 
         if !found {
@@ -121,6 +127,8 @@ impl NativeMediaFormat {
     pub(crate) fn get_i64(&mut self, key: &CStr) -> Option<i64> {
         let mut value = 0i64;
 
+        // SAFETY: self 持有有效格式对象，key 是有效 C 字符串；
+        // value 是调用期间独占、对齐且可写的 i64 输出位置。
         let found = unsafe { AMediaFormat_getInt64(self.inner.as_ptr(), key.as_ptr(), &mut value) };
 
         if !found {
@@ -180,6 +188,8 @@ impl NativeMediaFormat {
 
 impl Drop for NativeMediaFormat {
     fn drop(&mut self) {
+        // SAFETY: 本对象唯一拥有该有效句柄；对外返回的字段内容均已复制。
+        // Drop 只释放一次，释放后不再访问句柄。
         unsafe { AMediaFormat_delete(self.inner.as_ptr()) };
     }
 }

@@ -108,6 +108,9 @@ impl AAudioPcmStream {
         let requested_frames =
             i32::try_from(frame_count).map_err(|_| AAudioError::BufferTooLarge)?;
 
+        // SAFETY: stream 已验证为 PCM_I16，声道数与 self.channels 一致。
+        // samples 是有效且对齐的 i16 切片，长度包含 requested_frames 个完整采样帧。
+        // 当前独占访问 stream；同步 write 在返回前完成对切片的读取，不保留该指针。
         let result = unsafe {
             self.stream
                 .write(samples.as_ptr().cast(), requested_frames, 0)
