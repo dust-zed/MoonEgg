@@ -98,6 +98,10 @@ pub(crate) struct AndroidAudioDecoder {
     codec_config: Vec<u8>,
     // 是否必须在普通输入前补交配置
     codec_config_pending: bool,
+    // 当前连续解码区间的时间戳偏移，单位为微秒。
+    // None：尚未根据普通音频包建立映射。
+    // Some(0): 已经建立映射，但不需要平移
+    timestamp_offset_us: Option<i64>,
 }
 
 impl AndroidAudioDecoder {
@@ -117,6 +121,7 @@ impl AndroidAudioDecoder {
             failed: false,
             codec_config: audio_format.codec_config().to_vec(),
             codec_config_pending: false,
+            timestamp_offset_us: None,
         })
     }
 
@@ -142,19 +147,11 @@ impl AndroidAudioDecoder {
                 let Some(output_format) = self.pcm_format.as_ref() else {
                     return Err(AndroidDecoderError::MissingOutputFormat);
                 };
-                let pts_ns = presentation_time_us.checked_mul(1000).ok_or(
-                    AndroidDecoderError::TimestampOutOfRange {
-                        time_us: presentation_time_us,
-                    },
-                )?;
+                let media_pts = self.restore_output_timestamp(presentation_time_us)?;
                 let audio_buffer = output_format
                     .to_audio_buffer(&data)
                     .map_err(|error| AndroidDecoderError::Pcm { source: error })?;
-                let frame = DecodedFrame::new(
-                    self.track_id,
-                    MediaTime::from_nanoseconds(pts_ns),
-                    audio_buffer,
-                );
+                let frame = DecodedFrame::new(self.track_id, media_pts, audio_buffer);
                 Ok(ReceiveResult::Frame(frame))
             }
         }
@@ -185,7 +182,7 @@ impl AndroidAudioDecoder {
                 let Some(packet_pts) = packet.pts() else {
                     return Err(AndroidDecoderError::MissingPts);
                 };
-                let presentation_time_us = input_time_us(packet_pts)?;
+                let presentation_time_us = self.map_input_timestamp(packet_pts)?;
                 match self
                     .codec
                     .try_queue_data(packet.data(), presentation_time_us)
@@ -234,6 +231,7 @@ impl AndroidAudioDecoder {
             AndroidDecoderError::Codec { source: error }
         })?;
         self.codec_config_pending = needs_codec_config;
+        self.timestamp_offset_us = None;
         Ok(())
     }
     fn try_restore_codec_config(&mut self) -> Result<bool, AndroidDecoderError> {
@@ -252,6 +250,56 @@ impl AndroidAudioDecoder {
             }
         }
     }
+
+    fn map_input_timestamp(&mut self, timestamp: Timestamp) -> Result<u64, AndroidDecoderError> {
+        let microsecond_time_base = TimeBase::new(1, 1_000_000).expect("msg");
+        let timestamp_us = timestamp
+            .rescale(microsecond_time_base, Rounding::TowardZero)
+            .map_err(|error| AndroidDecoderError::TimeConversion { reason: error })?;
+        let offset_us = match self.timestamp_offset_us {
+            Some(offset) => offset,
+            None => {
+                let ticks = timestamp_us.ticks();
+                if ticks < 0 {
+                    ticks
+                        .checked_neg()
+                        .ok_or(AndroidDecoderError::TimestampOutOfRange { time_us: ticks })?
+                } else {
+                    0
+                }
+            }
+        };
+        let codec_pts_us = timestamp_us.ticks().checked_add(offset_us).ok_or(
+            AndroidDecoderError::TimestampOutOfRange {
+                time_us: timestamp_us.ticks(),
+            },
+        )?;
+        let codec_pts_us = u64::try_from(codec_pts_us)
+            .map_err(|_| AndroidDecoderError::UnsupportedInputTimestamp { timestamp })?;
+        self.timestamp_offset_us = Some(offset_us);
+        Ok(codec_pts_us)
+    }
+
+    fn restore_output_timestamp(
+        &self,
+        codec_pts_us: i64,
+    ) -> Result<MediaTime, AndroidDecoderError> {
+        let Some(offset_us) = self.timestamp_offset_us else {
+            return Err(AndroidDecoderError::InvalidState);
+        };
+        let media_pts_us = codec_pts_us.checked_sub(offset_us).ok_or(
+            AndroidDecoderError::TimestampOutOfRange {
+                time_us: codec_pts_us,
+            },
+        )?;
+        let media_pts_ns =
+            media_pts_us
+                .checked_mul(1000)
+                .ok_or(AndroidDecoderError::TimestampOutOfRange {
+                    time_us: codec_pts_us,
+                })?;
+        Ok(MediaTime::from_nanoseconds(media_pts_ns))
+    }
 }
 
 impl Decoder for AndroidAudioDecoder {
@@ -265,19 +313,4 @@ impl Decoder for AndroidAudioDecoder {
     fn submit(&mut self, input: DecodeInput) -> Result<SubmitResult, DecodeError> {
         AndroidAudioDecoder::submit(self, input).map_err(|error| error.into_decode_error())
     }
-}
-
-fn input_time_us(timestamp: Timestamp) -> Result<u64, AndroidDecoderError> {
-    // TODO: 支持负 PTS。当前先拒绝，后续设计解码器时间戳偏移、
-    // 输出时间戳还原及 seek/flush 行为；不能直接移除后续检查后 as u64。
-    // 回归样本: demo.m4a 的首包 PTS 为负
-    if timestamp.ticks() < 0 {
-        return Err(AndroidDecoderError::UnsupportedInputTimestamp { timestamp });
-    }
-    let microsecond_time_base = TimeBase::new(1, 1_000_000).expect("msg");
-    let timestamp_us = timestamp
-        .rescale(microsecond_time_base, Rounding::TowardZero)
-        .map_err(|error| AndroidDecoderError::TimeConversion { reason: error })?;
-    let ticks = timestamp_us.ticks() as u64;
-    Ok(ticks)
 }

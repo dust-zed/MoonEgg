@@ -108,6 +108,7 @@ pub struct PlaybackPipeline<X, D, O> {
     pending_packet: Option<EpochItem<Packet>>,
     source_phase: SourcePhase,
     duration_ms: Option<i64>,
+    media_start: MediaTime,
 }
 
 impl<X, D, O> PlaybackPipeline<X, D, O>
@@ -151,8 +152,15 @@ where
             None => None,
         };
 
-        let mut audio = AudioPipeline::new(decoder, output, audio_track, epoch, packet_capacity)
-            .map_err(PlaybackPipelineError::Audio)?;
+        let mut audio = AudioPipeline::new(
+            decoder,
+            output,
+            audio_track,
+            epoch,
+            packet_capacity,
+            start_time,
+        )
+        .map_err(PlaybackPipelineError::Audio)?;
 
         let position = audio
             .playback_position()
@@ -169,6 +177,7 @@ where
             pending_packet: None,
             source_phase: SourcePhase::Reading,
             duration_ms,
+            media_start: start_time,
         })
     }
 
@@ -300,15 +309,17 @@ where
             .audio
             .playback_position()
             .map_err(PlaybackPipelineError::Audio)?;
-
-        self.clock.reanchor(landed, position.played_frames());
+        let presentation_boundary = self.media_start.max(landed);
+        self.audio.set_presentation_boundary(presentation_boundary);
+        self.clock
+            .reanchor(presentation_boundary, position.played_frames());
 
         self.epoch = new_epoch;
         self.source_phase = SourcePhase::Reading;
 
         Ok(SeekOutcome {
             requested: target,
-            landed,
+            landed: presentation_boundary,
             epoch: new_epoch,
         })
     }
