@@ -136,6 +136,34 @@ impl NativePlayer {
             .send_command(command)
             .map_err(|_| PlayerBridgeError::CommandChannelClosed)
     }
+
+    #[cfg(target_os = "android")]
+    fn source_from_file_descriptor(
+        fd: i32,
+        offset: i64,
+        length: i64,
+    ) -> Result<moonegg_core::FileSource, PlayerBridgeError> {
+        use moonegg_android::duplicate_file_descriptor;
+        use moonegg_core::FileSource;
+
+        if fd < 0 {
+            return Err(PlayerBridgeError::InvalidFileDescriptor { fd });
+        }
+
+        if offset < 0 || length < 0 || offset.checked_add(length).is_none() {
+            return Err(PlayerBridgeError::InvalidSourceRange { offset, length });
+        }
+
+        let file =
+            duplicate_file_descriptor(fd).map_err(|err| PlayerBridgeError::CreatedFailed {
+                reason: format!("复制文件描述符失败: {err}"),
+            })?;
+        Ok(FileSource::Region {
+            file,
+            start: offset as u64,
+            length: length as u64,
+        })
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -148,25 +176,8 @@ impl NativePlayer {
         length: i64,
     ) -> Result<Arc<Self>, PlayerBridgeError> {
         use moonegg_android::{AndroidAudioOutputFactory, duplicate_file_descriptor};
-        use moonegg_core::FileSource;
 
-        if fd < 0 {
-            return Err(PlayerBridgeError::InvalidFileDescriptor { fd });
-        }
-
-        if offset < 0 || length < 0 || offset.checked_add(length).is_none() {
-            return Err(PlayerBridgeError::InvalidSourceRange { offset, length });
-        }
-        let file =
-            duplicate_file_descriptor(fd).map_err(|err| PlayerBridgeError::CreatedFailed {
-                reason: format!("复制文件描述符失败: {err}"),
-            })?;
-
-        let source = FileSource::Region {
-            file,
-            start: offset as u64,
-            length: length as u64,
-        };
+        let source = NativePlayer::source_from_file_descriptor(fd, offset, length)?;
 
         let engine =
             PlayerEngine::new_wav_source(source, AndroidAudioOutputFactory).map_err(|error| {
@@ -175,6 +186,37 @@ impl NativePlayer {
                 }
             })?;
         let player = Self {
+            engine: Mutex::new(Some(engine)),
+        };
+        Ok(Arc::new(player))
+    }
+    #[uniffi::constructor]
+    pub fn new_aac(path: String) -> Result<Arc<Self>, PlayerBridgeError> {
+        use moonegg_android::new_aac_player;
+        use moonegg_core::FileSource;
+
+        let source = FileSource::Path(PathBuf::from(path));
+        let engine = new_aac_player(source).map_err(|err| PlayerBridgeError::CreatedFailed {
+            reason: err.to_string(),
+        })?;
+        let player = NativePlayer {
+            engine: Mutex::new(Some(engine)),
+        };
+        Ok(Arc::new(player))
+    }
+    #[uniffi::constructor]
+    pub fn from_aac_file_descriptor(
+        fd: i32,
+        offset: i64,
+        length: i64,
+    ) -> Result<Arc<Self>, PlayerBridgeError> {
+        let source = Self::source_from_file_descriptor(fd, offset, length)?;
+        let engine = moonegg_android::new_aac_player(source).map_err(|error| {
+            PlayerBridgeError::CreatedFailed {
+                reason: error.to_string(),
+            }
+        })?;
+        let player = NativePlayer {
             engine: Mutex::new(Some(engine)),
         };
         Ok(Arc::new(player))
