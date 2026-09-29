@@ -38,7 +38,7 @@ pub(crate) enum AndroidDecoderError {
 }
 
 impl AndroidDecoderError {
-    fn into_decode_error(self) -> DecodeError {
+    pub(crate) fn into_decode_error(self) -> DecodeError {
         match self {
             Self::Format { source } => match source {
                 DecoderFormatError::UnsupportedCodec { .. } => DecodeError::Unsupported,

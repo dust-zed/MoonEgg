@@ -1,25 +1,25 @@
-use std::fs::File;
+use std::{fs::File, sync::Arc};
 
 use crate::{
     backends::{pcm::PcmDecoder, wav::WavDemuxer},
     error::PlaybackError,
-    media::{AudioPcmFormat, AudioSampleFormat, TrackFormat},
-    pipeline::PlaybackPipelineError,
-    ports::{AudioOutputFactory, DecodeError, DemuxError},
+    media::TrackFormat,
+    pipeline::{DeferredAudioOutput, PlaybackPipelineError},
+    ports::{AudioOutputFactory, DemuxError},
     runtime::{AudioPipelineFactory, CancellationToken},
     source::{BoundedReader, FileSource},
 };
 
 pub(crate) struct WavPlaybackFactory<F> {
     source: FileSource,
-    output_factory: F,
+    output_factory: Arc<F>,
 }
 
 impl<F> WavPlaybackFactory<F> {
     pub(crate) fn new(source: FileSource, output_factory: F) -> Self {
         Self {
             source,
-            output_factory,
+            output_factory: Arc::new(output_factory),
         }
     }
 }
@@ -30,7 +30,7 @@ where
 {
     type Demux = WavDemuxer<BoundedReader<File>>;
     type Decode = PcmDecoder;
-    type Output = F::Output;
+    type Output = DeferredAudioOutput<Arc<F>>;
 
     fn open_demuxer(&self, cancel: &CancellationToken) -> Result<Self::Demux, PlaybackError> {
         Self::check_canceled(cancel)?;
@@ -60,19 +60,10 @@ where
             PcmDecoder::new(track.id(), track_format.clone()).map_err(PlaybackError::Decode)?;
         Self::check_canceled(cancel)?;
 
-        // PcmDecoder 构造成功，已确认轨道是当前支持的 PCM S16LE。
-        // 该解码路径输出 I16，并保留轨道采样率和声道数。
-        let pcm_format = AudioPcmFormat::new(
-            track_format.sample_rate(),
-            track_format.channel_count(),
-            AudioSampleFormat::I16,
-        )
-        .map_err(|_| PlaybackError::Decode(DecodeError::InvalidData))?;
-
-        let output = self
-            .output_factory
-            .create(&pcm_format)
-            .map_err(PlaybackError::AudioOutput)?;
+        let output = {
+            let factory_clone = Arc::clone(&self.output_factory);
+            DeferredAudioOutput::new(factory_clone)
+        };
         Self::check_canceled(cancel)?;
 
         Ok((decoder, output))

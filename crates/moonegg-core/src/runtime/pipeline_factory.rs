@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use crate::{
     error::{PlaybackError, RuntimeError},
     media::{AudioBuffer, TrackFormat, TrackInfo},
-    pipeline::{PlaybackEpoch, PlaybackPipeline, PlaybackPipelineError},
-    ports::{AudioOutput, Decoder, Demuxer},
+    pipeline::{DeferredAudioOutput, PlaybackEpoch, PlaybackPipeline, PlaybackPipelineError},
+    ports::{AudioBackendFactory, AudioOutput, AudioOutputFactory, Decoder, Demuxer},
     runtime::worker::CancellationToken,
 };
 
@@ -59,5 +61,57 @@ pub(crate) trait AudioPipelineFactory: Send + Sync + 'static {
         } else {
             Ok(())
         }
+    }
+}
+
+pub(crate) struct BackendPlaybackFactory<B, F> {
+    backend: B,
+    output_factory: Arc<F>,
+}
+
+impl<B, F> BackendPlaybackFactory<B, F> {
+    pub(crate) fn new(backend: B, output_factory: F) -> Self {
+        Self {
+            backend,
+            output_factory: Arc::new(output_factory),
+        }
+    }
+}
+
+impl<B, F> AudioPipelineFactory for BackendPlaybackFactory<B, F>
+where
+    B: AudioBackendFactory,
+    F: AudioOutputFactory,
+{
+    type Decode = B::Decode;
+    type Demux = B::Demux;
+    type Output = DeferredAudioOutput<Arc<F>>;
+
+    fn open_demuxer(&self, cancel: &CancellationToken) -> Result<Self::Demux, PlaybackError> {
+        Self::check_canceled(cancel)?;
+
+        let demuxer = self.backend.open_demuxer().map_err(PlaybackError::Demux)?;
+        Self::check_canceled(cancel)?;
+        Ok(demuxer)
+    }
+
+    fn create_audio_components(
+        &self,
+        track: &TrackInfo,
+        cancel: &CancellationToken,
+    ) -> Result<(Self::Decode, Self::Output), PlaybackError> {
+        Self::check_canceled(cancel)?;
+        let decoder = self
+            .backend
+            .create_audio_decoder(track)
+            .map_err(PlaybackError::Decode)?;
+        Self::check_canceled(cancel)?;
+
+        let deferred_output = DeferredAudioOutput::new(Arc::clone(&self.output_factory));
+        Ok((decoder, deferred_output))
+    }
+
+    fn packet_capacity(&self) -> usize {
+        8
     }
 }

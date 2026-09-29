@@ -1,5 +1,7 @@
 use crate::{
-    media::{AudioBuffer, MediaTime, Packet, Rounding, TimeError, TrackFormat, TrackId},
+    media::{
+        AudioBuffer, AudioPcmFormat, MediaTime, Packet, Rounding, TimeError, TrackFormat, TrackId,
+    },
     pipeline::{
         EpochItem, PlaybackEpoch,
         audio::{AudioEnqueueResult, AudioPipeline, AudioPipelineError, AudioStepResult},
@@ -50,13 +52,58 @@ pub struct SeekOutcome {
     pub epoch: PlaybackEpoch,
 }
 
+#[derive(Debug)]
+enum PlaybackClockState {
+    WaitingForFormat {
+        anchor_media: MediaTime,
+        anchor_played_frames: u64,
+    },
+    Ready(AudioClock),
+}
+
+impl PlaybackClockState {
+    fn new(anchor_media: MediaTime, anchor_played_frames: u64) -> Self {
+        Self::WaitingForFormat {
+            anchor_media,
+            anchor_played_frames,
+        }
+    }
+
+    fn reanchor(&mut self, anchor_media: MediaTime, anchor_played_frames: u64) {
+        *self = Self::new(anchor_media, anchor_played_frames)
+    }
+
+    fn snapshot(
+        &mut self,
+        format: Option<AudioPcmFormat>,
+        position: AudioPlaybackPosition,
+    ) -> Result<ClockSnapshot, ClockError> {
+        match self {
+            Self::WaitingForFormat {
+                anchor_media,
+                anchor_played_frames,
+            } => {
+                let Some(format) = format else {
+                    return Ok(ClockSnapshot::new(*anchor_media, position.observed_at()));
+                };
+                let clock =
+                    AudioClock::new(format.sample_rate(), *anchor_media, *anchor_played_frames)?;
+                let snapshot = clock.snapshot(position)?;
+                *self = Self::Ready(clock);
+                Ok(snapshot)
+            }
+            Self::Ready(clock) => clock.snapshot(position),
+        }
+    }
+}
+
 pub struct PlaybackPipeline<X, D, O> {
     demuxer: X,
     audio: AudioPipeline<D, O>,
 
     audio_track: TrackId,
     epoch: PlaybackEpoch,
-    clock: AudioClock,
+    clock: PlaybackClockState,
 
     pending_packet: Option<EpochItem<Packet>>,
     source_phase: SourcePhase,
@@ -83,11 +130,9 @@ where
             .find(|track| track.id() == audio_track)
             .ok_or(PlaybackPipelineError::TrackNotFound)?;
 
-        let TrackFormat::Audio(format) = track.format() else {
+        let TrackFormat::Audio(_) = track.format() else {
             return Err(PlaybackPipelineError::NoAudioTrack);
         };
-
-        let sample_rate = format.sample_rate();
 
         let start_time = match track.start_time() {
             Some(timestamp) => timestamp
@@ -113,8 +158,7 @@ where
             .playback_position()
             .map_err(PlaybackPipelineError::Audio)?;
 
-        let clock = AudioClock::new(sample_rate, start_time, position.played_frames())
-            .map_err(PlaybackPipelineError::Clock)?;
+        let clock = PlaybackClockState::new(start_time, position.played_frames());
 
         Ok(Self {
             demuxer,
@@ -271,9 +315,9 @@ where
 
     pub fn clock_snapshot(&mut self) -> Result<ClockSnapshot, PlaybackPipelineError> {
         let position = self.playback_position()?;
-
+        let format = self.audio.output_format();
         self.clock
-            .snapshot(position)
+            .snapshot(format, position)
             .map_err(PlaybackPipelineError::Clock)
     }
 
