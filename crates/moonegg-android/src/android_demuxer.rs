@@ -85,7 +85,7 @@ pub(crate) enum AndroidDemuxerError {
 }
 
 impl AndroidDemuxerError {
-    fn into_demux_error(self) -> DemuxError {
+    pub(crate) fn into_demux_error(self) -> DemuxError {
         match self {
             AndroidDemuxerError::Extractor { source } => map_extractor_error(source),
             AndroidDemuxerError::Probe { source } => map_probe_error(source),

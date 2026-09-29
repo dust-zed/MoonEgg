@@ -9,6 +9,7 @@ mod queue;
 pub(crate) use coordinator::{
     CoordinateVideoError, VideoDiscardReason, VideoStepResult, coordinate_video_frame,
 };
+pub(crate) use deferred_audio_output::DeferredAudioOutput;
 pub(crate) use epoch::{EpochError, EpochItem, PlaybackEpoch};
 pub(crate) use playback::{
     PlaybackPipeline, PlaybackPipelineError, PlaybackStepResult, SeekOutcome,
