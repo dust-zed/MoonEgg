@@ -1,5 +1,8 @@
 use crate::{
-    media::{AudioBuffer, AudioPcmFormat, DecodedFrame, Packet, TrackId},
+    media::{
+        AudioBuffer, AudioBufferError, AudioPcmFormat, DecodedFrame, MediaTime, Packet, TimeError,
+        TrackId,
+    },
     pipeline::{BoundedQueue, EpochItem, PlaybackEpoch, QueueError, QueuePushResult},
     ports::{
         AudioOutput, AudioOutputError, AudioPlaybackPosition, AudioSubmitResult, DecodeError,
@@ -34,6 +37,8 @@ pub enum AudioPipelineError {
     Queue(QueueError),
     Decode(DecodeError),
     Output(AudioOutputError),
+    Time(TimeError),
+    Buffer(AudioBufferError),
     WrongTrack,
     InputClosed,
     UnexpectedDecoderEos,
@@ -52,6 +57,7 @@ pub struct AudioPipeline<D, O> {
     pending_frame: Option<DecodedFrame<AudioBuffer>>,
 
     phase: AudioPhase,
+    presentation_boundary: MediaTime,
 }
 
 impl<D, O> AudioPipeline<D, O>
@@ -65,6 +71,7 @@ where
         track_id: TrackId,
         epoch: PlaybackEpoch,
         packet_capacity: usize,
+        presentation_boundary: MediaTime,
     ) -> Result<Self, AudioPipelineError> {
         let packets = BoundedQueue::new(packet_capacity).map_err(AudioPipelineError::Queue)?;
 
@@ -77,6 +84,7 @@ where
             pending_input: None,
             pending_frame: None,
             phase: AudioPhase::Feeding,
+            presentation_boundary,
         })
     }
 
@@ -197,7 +205,8 @@ where
                     if frame.track_id() != self.track_id {
                         return Err(AudioPipelineError::WrongTrack);
                     }
-                    self.pending_frame = Some(frame);
+                    self.pending_frame =
+                        Self::trim_audio_before(frame, self.presentation_boundary)?;
                     progressed = true;
                 }
                 ReceiveResult::NotReady => {}
@@ -280,5 +289,56 @@ where
 
     pub fn output_format(&self) -> Option<AudioPcmFormat> {
         self.output.format()
+    }
+
+    pub(super) fn set_presentation_boundary(&mut self, boundary: MediaTime) {
+        self.presentation_boundary = boundary
+    }
+
+    fn trim_audio_before(
+        frame: DecodedFrame<AudioBuffer>,
+        boundary: MediaTime,
+    ) -> Result<Option<DecodedFrame<AudioBuffer>>, AudioPipelineError> {
+        const NANOS_PER_SECOND: u128 = 1_000_000_000;
+
+        let buffer = frame.payload();
+        let avaiable_frames = buffer.frame_count();
+
+        if avaiable_frames == 0 {
+            return Ok(None);
+        }
+
+        if frame.pts() >= boundary {
+            return Ok(Some(frame));
+        }
+
+        let pts_ns = i128::from(frame.pts().nanoseconds());
+        let boundary_pts = i128::from(boundary.nanoseconds());
+        let delta_ns = (boundary_pts - pts_ns) as u128;
+
+        let sample_rate = u128::from(buffer.sample_rate());
+
+        let frames_to_drop = (delta_ns * sample_rate).div_ceil(NANOS_PER_SECOND);
+
+        if frames_to_drop >= avaiable_frames as u128 {
+            return Ok(None);
+        }
+
+        let advance_ns = frames_to_drop * NANOS_PER_SECOND / sample_rate;
+        let advance_ns = i128::try_from(advance_ns)
+            .map_err(|_| AudioPipelineError::Time(TimeError::Overflow))?;
+
+        let new_pts_ns = i64::try_from(pts_ns + advance_ns)
+            .map_err(|_| AudioPipelineError::Time(TimeError::Overflow))?;
+        let frames_to_drop = frames_to_drop as usize;
+        let (track_id, _, mut buffer) = frame.into_parts();
+        buffer
+            .discard_prefix_frames(frames_to_drop)
+            .map_err(AudioPipelineError::Buffer)?;
+        Ok(Some(DecodedFrame::new(
+            track_id,
+            MediaTime::from_nanoseconds(new_pts_ns),
+            buffer,
+        )))
     }
 }

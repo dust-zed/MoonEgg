@@ -132,6 +132,27 @@ impl AudioBuffer {
     pub fn frame_count(&self) -> usize {
         self.sample_count() / self.channel_count() as usize
     }
+
+    pub fn discard_prefix_frames(&mut self, frames: usize) -> Result<(), AudioBufferError> {
+        let available_frames = self.frame_count();
+        if frames > available_frames {
+            return Err(AudioBufferError::TrimOutOfRange {
+                requested_frames: frames,
+                available_frames,
+            });
+        }
+        let channels = usize::from(self.channel_count());
+        let samples_to_remove = channels * frames;
+        match &mut self.samples {
+            AudioSamples::I16(data) => {
+                data.drain(..samples_to_remove);
+            }
+            AudioSamples::F32(data) => {
+                data.drain(..samples_to_remove);
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,4 +160,8 @@ pub enum AudioBufferError {
     InvalidSampleRate,
     InvalidChannelCount,
     IncompleteFrame,
+    TrimOutOfRange {
+        requested_frames: usize,
+        available_frames: usize,
+    },
 }
