@@ -51,7 +51,7 @@ fn map_probe_error(error: TrackProbeError) -> DemuxError {
         TrackProbeError::MissingMime { .. }
         | TrackProbeError::MissingField { .. }
         | TrackProbeError::InvalidField { .. }
-        | TrackProbeError::EmptyCodecConfig => DemuxError::InvalidData,
+        | TrackProbeError::EmptyCodecConfig { .. } => DemuxError::InvalidData,
         TrackProbeError::TrackIndexOutOfRange { .. } => DemuxError::Unsupported,
     }
 }

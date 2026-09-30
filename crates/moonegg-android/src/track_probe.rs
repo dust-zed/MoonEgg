@@ -1,5 +1,8 @@
+use std::ffi::CStr;
+
 use moonegg_core::media::{
-    AudioCodecId, AudioTrackFormat, TimeBase, TrackFormat, TrackId, TrackInfo,
+    AudioCodecId, AudioTrackFormat, H264CodecConfig, TimeBase, TrackFormat, TrackId, TrackInfo,
+    VideoCodecId, VideoTrackFormat,
 };
 
 use crate::{
@@ -31,8 +34,11 @@ pub(crate) enum TrackProbeError {
         value: i64,
     },
 
-    #[error("AAC 轨道的解码初始化配置 csd-0 为空")]
-    EmptyCodecConfig,
+    #[error("轨道 {track_index} 的解码初始化配置 {field} 为空")]
+    EmptyCodecConfig {
+        track_index: usize,
+        field: &'static str,
+    },
     #[error("轨道索引无法表示为 TrackId：track_index={track_index}")]
     TrackIndexOutOfRange { track_index: usize },
 }
@@ -40,8 +46,20 @@ pub(crate) enum TrackProbeError {
 pub(crate) fn find_aac_track(
     extractor: &NativeMediaExtractor,
 ) -> Result<Option<(usize, NativeMediaFormat)>, TrackProbeError> {
-    let track_count = extractor.track_count();
+    find_track_by_mime(extractor, "audio/mp4a-latm")
+}
 
+pub(crate) fn find_h264_track(
+    extractor: &NativeMediaExtractor,
+) -> Result<Option<(usize, NativeMediaFormat)>, TrackProbeError> {
+    find_track_by_mime(extractor, "video/avc")
+}
+
+fn find_track_by_mime(
+    extractor: &NativeMediaExtractor,
+    expected_mime: &str,
+) -> Result<Option<(usize, NativeMediaFormat)>, TrackProbeError> {
+    let track_count = extractor.track_count();
     for track_index in 0..track_count {
         let mut track_format = extractor
             .track_format(track_index)
@@ -56,11 +74,10 @@ pub(crate) fn find_aac_track(
         if mime_type.is_empty() {
             return Err(TrackProbeError::MissingMime { track_index });
         }
-        if mime_type == "audio/mp4a-latm" {
+        if mime_type == expected_mime {
             return Ok(Some((track_index, track_format)));
         }
     }
-
     Ok(None)
 }
 
@@ -138,25 +155,72 @@ fn read_aac_codec_config(
     track_format: &mut NativeMediaFormat,
     track_index: usize,
 ) -> Result<Vec<u8>, TrackProbeError> {
-    let codec_config =
-        track_format
-            .get_buffer(c"csd-0")
-            .map_err(|error| TrackProbeError::Format {
-                track_index,
-                source: error,
-            })?;
+    read_required_codec_config(track_format, track_index, c"csd-0", "csd-0")
+}
 
+fn read_video_dimensions(
+    track_format: &mut NativeMediaFormat,
+    track_index: usize,
+) -> Result<(u32, u32), TrackProbeError> {
+    let width = track_format
+        .get_i32(c"width")
+        .ok_or(TrackProbeError::MissingField {
+            track_index,
+            field: "width",
+        })?;
+    let height = track_format
+        .get_i32(c"height")
+        .ok_or(TrackProbeError::MissingField {
+            track_index,
+            field: "height",
+        })?;
+    if width <= 0 {
+        return Err(TrackProbeError::InvalidField {
+            track_index,
+            field: "width",
+            value: width as i64,
+        });
+    }
+    if height <= 0 {
+        return Err(TrackProbeError::InvalidField {
+            track_index,
+            field: "height",
+            value: height as i64,
+        });
+    }
+    let witdh_u32 = width as u32;
+    let height_u32 = height as u32;
+    Ok((witdh_u32, height_u32))
+}
+
+fn read_h264_codec_config(
+    track_format: &mut NativeMediaFormat,
+    track_index: usize,
+) -> Result<H264CodecConfig, TrackProbeError> {
+    let sps = read_required_codec_config(track_format, track_index, c"csd-0", "csd-0")?;
+    let pps = read_required_codec_config(track_format, track_index, c"csd-1", "csd-1")?;
+    Ok(H264CodecConfig::new(sps, pps))
+}
+
+fn read_required_codec_config(
+    track_format: &mut NativeMediaFormat,
+    track_index: usize,
+    key: &CStr,
+    field: &'static str,
+) -> Result<Vec<u8>, TrackProbeError> {
+    let codec_config = track_format
+        .get_buffer(key)
+        .map_err(|error| TrackProbeError::Format {
+            track_index,
+            source: error,
+        })?;
     if let Some(codec_config) = codec_config {
         if codec_config.is_empty() {
-            return Err(TrackProbeError::EmptyCodecConfig);
+            return Err(TrackProbeError::EmptyCodecConfig { track_index, field });
         }
         return Ok(codec_config);
     }
-
-    Err(TrackProbeError::MissingField {
-        track_index,
-        field: "csd-0",
-    })
+    Err(TrackProbeError::MissingField { track_index, field })
 }
 
 pub(crate) fn probe_aac_track(
@@ -184,6 +248,34 @@ pub(crate) fn probe_aac_track(
                 TrackFormat::Audio(audio_format),
             );
 
+            Ok(Some(track_info))
+        }
+        None => Ok(None),
+    }
+}
+
+pub(crate) fn probe_h264_track(
+    extractor: &NativeMediaExtractor,
+) -> Result<Option<TrackInfo>, TrackProbeError> {
+    match find_h264_track(extractor)? {
+        Some((track_index, mut track_format)) => {
+            let raw_track_id = u32::try_from(track_index)
+                .map_err(|_| TrackProbeError::TrackIndexOutOfRange { track_index })?;
+            let track_id = TrackId::new(raw_track_id);
+
+            let (width, height) = read_video_dimensions(&mut track_format, track_index)?;
+            let codec_config = read_h264_codec_config(&mut track_format, track_index)?;
+            let video_format =
+                VideoTrackFormat::new(VideoCodecId::H264, width, height, codec_config);
+            let time_base = TimeBase::new(1, 1_000_000).expect("固定的微秒时间基必然有效");
+            let duration_us = read_duration_us(&mut track_format, track_index)?;
+            let track_info = TrackInfo::new(
+                track_id,
+                time_base,
+                None,
+                duration_us,
+                TrackFormat::Video(video_format),
+            );
             Ok(Some(track_info))
         }
         None => Ok(None),
