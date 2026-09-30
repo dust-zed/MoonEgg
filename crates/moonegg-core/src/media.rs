@@ -8,7 +8,7 @@ mod track;
 
 pub use format::{
     AudioCodecId, AudioPcmFormat, AudioPcmFormatError, AudioSampleFormat, AudioTrackFormat,
-    TrackFormat, VideoCodecId, VideoTrackFormat,
+    H264CodecConfig, TrackFormat, VideoCodecId, VideoTrackFormat,
 };
 pub use frame::{AudioBuffer, AudioBufferError, AudioSamples, DecodedFrame};
 pub use packet::Packet;

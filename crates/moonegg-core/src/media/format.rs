@@ -56,11 +56,16 @@ pub struct VideoTrackFormat {
     codec: VideoCodecId,
     width: u32,
     height: u32,
-    codec_config: Vec<u8>,
+    codec_config: H264CodecConfig,
 }
 
 impl VideoTrackFormat {
-    pub fn new(codec: VideoCodecId, width: u32, height: u32, codec_config: Vec<u8>) -> Self {
+    pub fn new(
+        codec: VideoCodecId,
+        width: u32,
+        height: u32,
+        codec_config: H264CodecConfig,
+    ) -> Self {
         Self {
             codec,
             width,
@@ -81,7 +86,7 @@ impl VideoTrackFormat {
         self.height
     }
 
-    pub fn codec_config(&self) -> &[u8] {
+    pub fn codec_config(&self) -> &H264CodecConfig {
         &self.codec_config
     }
 }
@@ -140,5 +145,25 @@ impl AudioPcmFormat {
 
     pub fn sample_format(&self) -> AudioSampleFormat {
         self.sample_format
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct H264CodecConfig {
+    sps: Vec<u8>,
+    pps: Vec<u8>,
+}
+
+impl H264CodecConfig {
+    pub fn new(sps: Vec<u8>, pps: Vec<u8>) -> Self {
+        Self { sps, pps }
+    }
+
+    pub fn sps(&self) -> &[u8] {
+        &self.sps
+    }
+
+    pub fn pps(&self) -> &[u8] {
+        &self.pps
     }
 }
