@@ -188,9 +188,9 @@ fn read_video_dimensions(
             value: height as i64,
         });
     }
-    let witdh_u32 = width as u32;
+    let width_u32 = width as u32;
     let height_u32 = height as u32;
-    Ok((witdh_u32, height_u32))
+    Ok((width_u32, height_u32))
 }
 
 fn read_h264_codec_config(

@@ -1,7 +1,7 @@
 use std::fs::File;
 
 use moonegg_core::{
-    media::{MediaTime, Packet, Timestamp, TrackInfo},
+    media::{MediaTime, Packet, Timestamp, TrackFormat, TrackInfo},
     ports::{DemuxError, Demuxer, ReadPacketResult},
 };
 use ndk_sys::{
@@ -11,7 +11,7 @@ use ndk_sys::{
 use crate::{
     media_extractor::{MediaExtractorError, NativeMediaExtractor},
     media_format::MediaFormatError,
-    track_probe::{TrackProbeError, probe_aac_track},
+    track_probe::{TrackProbeError, probe_aac_track, probe_h264_track},
 };
 
 fn map_extractor_error(error: MediaExtractorError) -> DemuxError {
@@ -60,10 +60,12 @@ fn map_probe_error(error: TrackProbeError) -> DemuxError {
 pub(crate) enum AndroidDemuxerError {
     #[error("媒体提取器调用失败：{source}")]
     Extractor { source: MediaExtractorError },
-    #[error("探测音频轨道失败：{source}")]
+    #[error("探测媒体轨道失败：{source}")]
     Probe { source: TrackProbeError },
     #[error("媒体中没有可用的 AAC 轨道")]
     NoAacTrack,
+    #[error("媒体中没有可用的 H.264 轨道")]
+    NoH264Track,
     #[error("媒体提取器返回了未选中的轨道：track_index={track_index}")]
     UnexpectedTrack { track_index: usize },
     #[error("无法取得当前编码样本的大小")]
@@ -89,9 +91,9 @@ impl AndroidDemuxerError {
         match self {
             AndroidDemuxerError::Extractor { source } => map_extractor_error(source),
             AndroidDemuxerError::Probe { source } => map_probe_error(source),
-            AndroidDemuxerError::NoAacTrack | AndroidDemuxerError::EncryptedSample => {
-                DemuxError::Unsupported
-            }
+            AndroidDemuxerError::NoAacTrack
+            | AndroidDemuxerError::NoH264Track
+            | AndroidDemuxerError::EncryptedSample => DemuxError::Unsupported,
             AndroidDemuxerError::InvalidSampleSize { size, limit } => {
                 if size > limit {
                     DemuxError::Unsupported
@@ -111,7 +113,41 @@ impl AndroidDemuxerError {
 }
 
 // 1MiB
-const MAX_SAMPLE_BYTES: usize = 1024 * 1024;
+const MAX_AUDIO_SAMPLE_BYTES: usize = 1024 * 1024;
+// 16MiB
+const MAX_VIDEO_SAMPLE_BYTES: usize = 1024 * 1024 * 16;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DemuxTrackSelection {
+    AudioOnly,
+    AudioVideo,
+}
+
+fn probe_selected_tracks(
+    extractor: &NativeMediaExtractor,
+    selection: DemuxTrackSelection,
+) -> Result<Vec<TrackInfo>, AndroidDemuxerError> {
+    let mut tracks = Vec::new();
+    match selection {
+        DemuxTrackSelection::AudioOnly => {
+            let track = probe_aac_track(extractor)
+                .map_err(|error| AndroidDemuxerError::Probe { source: error })?
+                .ok_or(AndroidDemuxerError::NoAacTrack)?;
+            tracks.push(track);
+        }
+        DemuxTrackSelection::AudioVideo => {
+            let track_aac = probe_aac_track(extractor)
+                .map_err(|error| AndroidDemuxerError::Probe { source: error })?
+                .ok_or(AndroidDemuxerError::NoAacTrack)?;
+            let track_h264 = probe_h264_track(extractor)
+                .map_err(|error| AndroidDemuxerError::Probe { source: error })?
+                .ok_or(AndroidDemuxerError::NoH264Track)?;
+            tracks.push(track_h264);
+            tracks.push(track_aac);
+        }
+    }
+    Ok(tracks)
+}
 
 pub(crate) struct AndroidDemuxer {
     extractor: NativeMediaExtractor,
@@ -120,31 +156,33 @@ pub(crate) struct AndroidDemuxer {
 }
 
 impl AndroidDemuxer {
-    pub(crate) fn from_file(
+    pub(crate) fn from_file_with_selection(
         file: File,
         start: u64,
         length: u64,
+        selection: DemuxTrackSelection,
     ) -> Result<Self, AndroidDemuxerError> {
         let mut extractor = NativeMediaExtractor::from_file(file, start, length)
-            .map_err(|err| AndroidDemuxerError::Extractor { source: err })?;
-
-        let track = probe_aac_track(&extractor)
-            .map_err(|error| AndroidDemuxerError::Probe { source: error })?
-            .ok_or(AndroidDemuxerError::NoAacTrack)?;
-
-        let track_index = track.id().value() as usize;
-
-        extractor
-            .select_track(track_index)
             .map_err(|error| AndroidDemuxerError::Extractor { source: error })?;
-
-        let tracks = vec![track];
-
+        let tracks = probe_selected_tracks(&extractor, selection)?;
+        for track in tracks.iter() {
+            let track_index = track.id().value() as usize;
+            extractor
+                .select_track(track_index)
+                .map_err(|error| AndroidDemuxerError::Extractor { source: error })?;
+        }
         Ok(Self {
             extractor,
             tracks,
             source_ended: false,
         })
+    }
+    pub(crate) fn from_file(
+        file: File,
+        start: u64,
+        length: u64,
+    ) -> Result<Self, AndroidDemuxerError> {
+        Self::from_file_with_selection(file, start, length, DemuxTrackSelection::AudioOnly)
     }
 
     pub(crate) fn tracks(&self) -> &[TrackInfo] {
@@ -173,15 +211,19 @@ impl AndroidDemuxer {
         let time_base = track_info.time_base();
         let track_id = track_info.id();
 
+        let sample_size_limit = match track_info.format() {
+            TrackFormat::Audio(_) => MAX_AUDIO_SAMPLE_BYTES,
+            TrackFormat::Video(_) => MAX_VIDEO_SAMPLE_BYTES,
+        };
         let sample_size = self
             .extractor
             .sample_size()
             .ok_or(AndroidDemuxerError::MissingSampleSize)?;
 
-        if sample_size == 0 || sample_size > MAX_SAMPLE_BYTES {
+        if sample_size == 0 || sample_size > sample_size_limit {
             return Err(AndroidDemuxerError::InvalidSampleSize {
                 size: sample_size,
-                limit: MAX_SAMPLE_BYTES,
+                limit: sample_size_limit,
             });
         }
 

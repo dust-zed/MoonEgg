@@ -1,10 +1,11 @@
 use std::{
-    error,
     ffi::CStr,
     ptr::{NonNull, null_mut},
+    rc::Rc,
     slice::from_raw_parts,
 };
 
+use ndk::native_window::NativeWindow;
 use ndk_sys::{
     AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG, AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM,
     AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED, AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED,
@@ -94,6 +95,35 @@ pub(crate) enum CodecOutput {
     Buffer { buffer: CodecOutputBuffer },
     EndOfStream,
 }
+/// 一次 Surface 输出槽位领取的凭据
+///
+/// 不实现 Clone/ Copy，避免上层复制领取凭据。
+/// 注意：它目前不是自动归还槽位的 RAII 对象。
+#[derive(Debug)]
+#[must_use = "Surface 输出凭据需要用于呈现或丢弃；flush 会使其失效"]
+struct SurfaceOutputToken {
+    // 不需要保存数字，只需要一个独立的共享对象来标识本次领取。
+    identity: Rc<()>,
+    presentation_time_us: i64,
+    flags: u32,
+}
+
+impl SurfaceOutputToken {
+    pub(crate) fn presentation_time_us(&self) -> i64 {
+        self.presentation_time_us
+    }
+
+    pub(crate) fn flags(&self) -> u32 {
+        self.flags
+    }
+}
+
+pub(crate) enum SurfaceCodecOutput {
+    NotReady,
+    FormatChanged { format: NativeMediaFormat },
+    Frame { token: SurfaceOutputToken },
+    EndOfStream,
+}
 
 #[derive(Debug)]
 pub(crate) struct NativeMediaCodec {
@@ -101,39 +131,50 @@ pub(crate) struct NativeMediaCodec {
     pending_input_index: Option<usize>,
     failed: bool,
     input_eos_queued: bool,
+    // 真实的输出槽位仍由 codec 持有。
     pending_output: Option<PendingOutput>,
+    // None 表示字节输出；Some 表示 Surface 输出。
+    output_window: Option<NativeWindow>,
+    // Some 表示已经把当前槽位的 token 交给上层，
+    // 必须等它归还或被 flush 失效后，才能交付下一帧。
+    pending_surface_identity: Option<Rc<()>>,
     // 已经取得并处理了带 EOS 标记的输出槽位
     output_eos_seen: bool,
     output_started: bool,
 }
 
 impl NativeMediaCodec {
-    pub(crate) fn new_audio_decoder(
+    fn new_decoder(
         mime: &CStr,
         format: &NativeMediaFormat,
+        output_window: Option<NativeWindow>,
     ) -> Result<Self, MediaCodecError> {
         // SAFETY: mime 是调用期间有效、以零字节结尾的 C 字符串。
         // 返回的句柄随后检查非空，并由唯一的 NativeMediaCodec 管理。
         let raw_codec = unsafe { AMediaCodec_createDecoderByType(mime.as_ptr()) };
-
         let inner = NonNull::new(raw_codec).ok_or(MediaCodecError::CreateFailed)?;
 
-        // 目的就是为了从这里开始，任何后续失败都通过 Drop 释放资源
         let codec = Self {
             inner,
             pending_input_index: None,
             failed: false,
             input_eos_queued: false,
             pending_output: None,
+            output_window,
+            pending_surface_identity: None,
             output_eos_seen: false,
             output_started: false,
         };
 
+        let raw_window = match codec.output_window.as_ref() {
+            None => null_mut(),
+            Some(window) => window.ptr().as_ptr(),
+        };
         // SAFETY: codec 刚创建且尚未配置，format 在调用期间有效。
-        // 当前为未加密音频的缓冲区输出模式，Surface 和 Crypto 均允许为空；
+        // 当前为未加密的缓冲区输出模式，Surface 和 Crypto 均允许为空；
         // flags=0 表示解码。此时句柄尚未向外暴露，不存在并发调用。
         let status = unsafe {
-            AMediaCodec_configure(inner.as_ptr(), format.as_ptr(), null_mut(), null_mut(), 0)
+            AMediaCodec_configure(inner.as_ptr(), format.as_ptr(), raw_window, null_mut(), 0)
         };
 
         if status != media_status_t::AMEDIA_OK {
@@ -141,13 +182,27 @@ impl NativeMediaCodec {
         }
 
         // SAFETY: codec 有效且 configure 已成功，尚未启动，无并发访问。
-        let status = unsafe { AMediaCodec_start(codec.inner.as_ptr()) };
+        let status = unsafe { AMediaCodec_start(inner.as_ptr()) };
 
         if status != media_status_t::AMEDIA_OK {
             return Err(MediaCodecError::StartFailed { status: status.0 });
         }
-
         Ok(codec)
+    }
+
+    pub(crate) fn new_audio_decoder(
+        mime: &CStr,
+        format: &NativeMediaFormat,
+    ) -> Result<Self, MediaCodecError> {
+        Self::new_decoder(mime, format, None)
+    }
+
+    pub(crate) fn new_video_decoder(
+        mime: &CStr,
+        format: &NativeMediaFormat,
+        output_window: NativeWindow,
+    ) -> Result<Self, MediaCodecError> {
+        Self::new_decoder(mime, format, Some(output_window))
     }
 
     // 已获得缓冲区则复用，没有才申请
@@ -389,16 +444,9 @@ impl NativeMediaCodec {
         let (output_index, buffer_info) = (pending_output.index, pending_output.info);
         let copy_result = self.copy_output_data(output_index, &buffer_info);
 
-        // SAFETY: output_index 是当前尚未归还的输出槽位，复制操作已经结束，
-        // 不再持有其内存借用；render=false 适用于当前音频缓冲区输出模式。
-        // 成功后清除 pending_output；失败则将 codec 标记为不可继续使用。
-        let status =
-            unsafe { AMediaCodec_releaseOutputBuffer(self.inner.as_ptr(), output_index, false) };
-        if status != media_status_t::AMEDIA_OK {
-            self.failed = true;
-            return Err(MediaCodecError::ReleaseOutputFailed { status: status.0 });
-        }
-        self.pending_output = None;
+        // 音频输出不呈现到 Surface。
+        // 若归还失败，优先返回归还错误
+        self.release_pending_output(false)?;
         let data = match copy_result {
             Ok(data) => data,
             Err(error) => {
@@ -406,6 +454,7 @@ impl NativeMediaCodec {
                 return Err(error);
             }
         };
+
         Ok(CodecOutputBuffer {
             data,
             presentation_time_us: buffer_info.presentationTimeUs,
@@ -418,24 +467,22 @@ impl NativeMediaCodec {
     }
 
     pub(crate) fn try_receive(&mut self) -> Result<CodecOutput, MediaCodecError> {
-        if self.failed {
+        if self.failed || self.output_window.is_some() {
             return Err(MediaCodecError::InvalidState);
         }
+
         if self.output_eos_seen {
             return Ok(CodecOutput::EndOfStream);
         }
         match self.ensure_output_buffer()? {
-            OutputPoll::NotReady => Ok(CodecOutput::NotReady),
-            OutputPoll::BuffersChanged => Ok(CodecOutput::NotReady),
-            OutputPoll::FormatChanged => Ok(CodecOutput::FormatChanged {
-                format: self.output_format()?,
-            }),
+            OutputPoll::NotReady | OutputPoll::BuffersChanged => Ok(CodecOutput::NotReady),
+            OutputPoll::FormatChanged => {
+                let format = self.output_format()?;
+                Ok(CodecOutput::FormatChanged { format })
+            }
             OutputPoll::BufferReady => {
                 let output_buffer = self.take_output_buffer()?;
                 let has_eos = (output_buffer.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0;
-                if has_eos {
-                    self.output_eos_seen = true;
-                }
                 if !output_buffer.data.is_empty() {
                     Ok(CodecOutput::Buffer {
                         buffer: output_buffer,
@@ -447,6 +494,98 @@ impl NativeMediaCodec {
                 }
             }
         }
+    }
+
+    pub(crate) fn try_receive_surface(&mut self) -> Result<SurfaceCodecOutput, MediaCodecError> {
+        if self.failed || self.output_window.is_none() {
+            return Err(MediaCodecError::InvalidState);
+        }
+
+        // 上一帧还在上层手中。
+        // 返回 NotReady，避免把同一个槽位再次包装成交付的帧。
+        if self.pending_surface_identity.is_some() {
+            return Ok(SurfaceCodecOutput::NotReady);
+        }
+
+        if self.output_eos_seen {
+            return Ok(SurfaceCodecOutput::EndOfStream);
+        }
+
+        match self.ensure_output_buffer()? {
+            OutputPoll::NotReady | OutputPoll::BuffersChanged => Ok(SurfaceCodecOutput::NotReady),
+            OutputPoll::FormatChanged => {
+                let format = self.output_format()?;
+                Ok(SurfaceCodecOutput::FormatChanged { format })
+            }
+            OutputPoll::BufferReady => {
+                let buffer_info = self
+                    .pending_output
+                    .as_ref()
+                    .ok_or(MediaCodecError::InvalidState)?
+                    .info;
+                if buffer_info.size < 0 {
+                    self.release_pending_output(false)?;
+
+                    self.failed = true;
+                    return Err(MediaCodecError::InvalidOutputSize {
+                        size: buffer_info.size,
+                    });
+                }
+
+                let is_codec_config =
+                    (buffer_info.flags & AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG) != 0;
+                // 配置输出和空输出不能作为视频帧交给上层
+                if is_codec_config || buffer_info.size == 0 {
+                    self.release_pending_output(false)?;
+
+                    return if self.output_eos_seen {
+                        Ok(SurfaceCodecOutput::EndOfStream)
+                    } else {
+                        Ok(SurfaceCodecOutput::NotReady)
+                    };
+                }
+                // 每一次交付都创建独立的身份对象。
+                // 即使平台服用了相同槽位索引，这个身份也不同。
+                let identity = Rc::new(());
+                // codec 留下一份引用，用于归还时核对身份。
+                self.pending_surface_identity = Some(Rc::clone(&identity));
+
+                let token = SurfaceOutputToken {
+                    identity,
+                    presentation_time_us: buffer_info.presentationTimeUs,
+                    flags: buffer_info.flags,
+                };
+                Ok(SurfaceCodecOutput::Frame { token })
+            }
+        }
+    }
+
+    pub(crate) fn release_surface_output(
+        &mut self,
+        token: SurfaceOutputToken,
+        render: bool,
+    ) -> Result<(), MediaCodecError> {
+        if self.failed || self.output_window.is_none() {
+            return Err(MediaCodecError::InvalidState);
+        }
+
+        let identity_matches = match self.pending_surface_identity.as_ref() {
+            Some(current_identity) => Rc::ptr_eq(current_identity, &token.identity),
+            None => false,
+        };
+        if !identity_matches {
+            // 旧 token 不能用于呈现
+            if render {
+                return Err(MediaCodecError::InvalidState);
+            }
+            // 丢弃已失效的 token 是允许的。
+            // 例如 flush 已经收回其槽位，此时不能再次调用平台释放接口。
+            //
+            // 也不能清空 pending_output 或 pending_surface_identity，
+            // 因为它们此时可能属于后来领取的新帧。
+            return Ok(());
+        }
+        self.release_pending_output(render)
     }
 
     pub(crate) fn flush(&mut self) -> Result<(), MediaCodecError> {
@@ -462,8 +601,48 @@ impl NativeMediaCodec {
         }
         self.pending_input_index = None;
         self.pending_output = None;
+        self.pending_surface_identity = None;
         self.input_eos_queued = false;
         self.output_eos_seen = false;
+        Ok(())
+    }
+
+    fn release_pending_output(&mut self, render: bool) -> Result<(), MediaCodecError> {
+        if self.failed {
+            return Err(MediaCodecError::InvalidState);
+        }
+        if self.output_window.is_none() && render {
+            return Err(MediaCodecError::InvalidState);
+        }
+        let Some(pending_output) = self.pending_output.as_ref() else {
+            return Err(MediaCodecError::InvalidState);
+        };
+
+        let output_index = pending_output.index;
+        let buffer_info = pending_output.info;
+        let has_eos = (buffer_info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0;
+
+        // SAFETY:
+        // output_index 来自本 codec当前持有的 pending_output,
+        // 尚未归还，也未被成功的 flush 失效。
+        // 调用期间独占访问 codec，不再持有输出内存借用。
+        // render = true 时，已确认存在本实例持有的输出窗口
+        let status =
+            unsafe { AMediaCodec_releaseOutputBuffer(self.inner.as_ptr(), output_index, render) };
+
+        if status != media_status_t::AMEDIA_OK {
+            self.failed = true;
+            return Err(MediaCodecError::ReleaseOutputFailed { status: status.0 });
+        }
+
+        // 平台归还成功后，再更新本地状态。
+        self.pending_output = None;
+        self.pending_surface_identity = None;
+
+        if has_eos {
+            self.output_eos_seen = true;
+        }
+
         Ok(())
     }
 }
