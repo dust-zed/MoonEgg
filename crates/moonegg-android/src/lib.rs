@@ -44,6 +44,9 @@ mod video_buffer;
 mod android_video_decoder;
 
 #[cfg(target_os = "android")]
+mod video_output;
+
+#[cfg(target_os = "android")]
 pub use audio_output::{AndroidAudioOutput, AndroidAudioOutputFactory};
 
 #[cfg(target_os = "android")]
