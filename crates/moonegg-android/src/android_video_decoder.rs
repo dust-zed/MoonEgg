@@ -5,13 +5,13 @@ use moonegg_core::{
         DecodedFrame, MediaTime, Rounding, TimeBase, TimeError, Timestamp, TrackId,
         VideoTrackFormat,
     },
-    ports::ReceiveResult,
+    ports::{DecodeError, DecodeInput, Decoder, ReceiveResult, SubmitResult},
 };
 use ndk::native_window::NativeWindow;
 
 use crate::{
     decoder_format::{VideoDecoderFormatError, build_h264_decoder_format},
-    media_codec::{MediaCodecError, NativeMediaCodec, SurfaceCodecOutput},
+    media_codec::{InputQueueResult, MediaCodecError, NativeMediaCodec, SurfaceCodecOutput},
     video_buffer::AndroidVideoBuffer,
     video_codec_session::{VideoCodecSession, VideoCodecSessionError},
 };
@@ -46,11 +46,68 @@ pub(crate) enum AndroidVideoDecoderError {
     UnsupportedInputTimestamp { timestamp: Timestamp },
 }
 
+impl AndroidVideoDecoderError {
+    fn map_codec_error(source: MediaCodecError) -> DecodeError {
+        match source {
+            MediaCodecError::InvalidState => DecodeError::InvalidState,
+            MediaCodecError::EmptyInput => DecodeError::InvalidData,
+            // 合法数据包也可能超过当前输入槽位容量。
+            MediaCodecError::InputBufferTooSmall { .. } => DecodeError::Unsupported,
+            MediaCodecError::CreateFailed
+            | MediaCodecError::ConfigureFailed { .. }
+            | MediaCodecError::StartFailed { .. }
+            | MediaCodecError::DequeueInputFailed { .. }
+            | MediaCodecError::NullInputBuffer { .. }
+            | MediaCodecError::QueueInputFailed { .. }
+            | MediaCodecError::DequeueOutputFailed { .. }
+            | MediaCodecError::GetOutputFormatFailed
+            | MediaCodecError::OutputBufferTooSmall { .. }
+            | MediaCodecError::InvalidOutputSize { .. }
+            | MediaCodecError::NullOutputBuffer { .. }
+            | MediaCodecError::ReleaseOutputFailed { .. }
+            | MediaCodecError::FlushFailed { .. } => DecodeError::Platform,
+        }
+    }
+
+    pub(crate) fn into_decode_error(self) -> DecodeError {
+        match self {
+            Self::Format { source } => match source {
+                VideoDecoderFormatError::UnsupportedCodec { .. } => DecodeError::Unsupported,
+                VideoDecoderFormatError::InvalidDimensions { .. }
+                | VideoDecoderFormatError::EmptySps
+                | VideoDecoderFormatError::EmptyPps => DecodeError::InvalidData,
+                VideoDecoderFormatError::Format { .. } => DecodeError::Platform,
+            },
+            Self::Codec { source } => Self::map_codec_error(source),
+            Self::Session { source } => match source {
+                VideoCodecSessionError::BorrowConflict => DecodeError::InvalidState,
+                VideoCodecSessionError::Codec { source } => Self::map_codec_error(source),
+            },
+            Self::InvalidState | Self::UnexpectedTrack { .. } => DecodeError::InvalidState,
+            Self::MissingPts => DecodeError::InvalidData,
+            Self::TimeConversion { reason } => match reason {
+                TimeError::InvalidTimeBase => DecodeError::InvalidData,
+                TimeError::Overflow => DecodeError::Unsupported,
+            },
+            Self::TimestampOutOfRange { .. } | Self::UnsupportedInputTimestamp { .. } => {
+                DecodeError::Unsupported
+            }
+        }
+    }
+}
+
 pub(crate) struct AndroidVideoDecoder {
     session: Rc<VideoCodecSession>,
     track_id: TrackId,
     failed: bool,
     timestamp_offset_us: Option<i64>,
+
+    // SPS 后接 PPS 的完整配置字节。
+    codec_config: Vec<u8>,
+    // 普通输入前是否需要补交配置
+    codec_config_pending: bool,
+    // 是否还在等待当前解码区间的第一帧关键帧
+    needs_keyframe: bool,
 }
 
 impl AndroidVideoDecoder {
@@ -65,10 +122,18 @@ impl AndroidVideoDecoder {
             NativeMediaCodec::new_video_decoder(c"video/avc", &decoder_format, output_window)
                 .map_err(|error| AndroidVideoDecoderError::Codec { source: error })?;
         let session = VideoCodecSession::new(codec);
+
+        let mut codec_config = Vec::new();
+        codec_config.extend_from_slice(video_format.codec_config().sps());
+        codec_config.extend_from_slice(video_format.codec_config().pps());
+
         Ok(Self {
             session,
             track_id,
             failed: false,
+            codec_config,
+            codec_config_pending: false,
+            needs_keyframe: true,
             timestamp_offset_us: None,
         })
     }
@@ -150,7 +215,97 @@ impl AndroidVideoDecoder {
         }
     }
 
-    fn receive(&mut self) -> Result<ReceiveResult<AndroidVideoBuffer>, AndroidVideoDecoderError> {
+    fn try_restore_codec_config(&mut self) -> Result<bool, AndroidVideoDecoderError> {
+        if !self.codec_config_pending {
+            return Ok(true);
+        }
+        let queue_result = self
+            .session
+            .with_codec(|codec| codec.try_queue_codec_config(&self.codec_config))
+            .map_err(|error| AndroidVideoDecoderError::Session { source: error })?;
+
+        match queue_result {
+            InputQueueResult::WouldBlock => Ok(false),
+            InputQueueResult::Queued => {
+                self.codec_config_pending = false;
+                Ok(true)
+            }
+        }
+    }
+
+    fn submit_inner(
+        &mut self,
+        input: DecodeInput,
+    ) -> Result<SubmitResult, AndroidVideoDecoderError> {
+        match input {
+            DecodeInput::EndOfStream => {
+                if !self.try_restore_codec_config()? {
+                    return Ok(SubmitResult::Backpressure(DecodeInput::EndOfStream));
+                }
+                let queue_result = self
+                    .session
+                    .with_codec(|codec| codec.try_queue_eos())
+                    .map_err(|error| AndroidVideoDecoderError::Session { source: error })?;
+                match queue_result {
+                    InputQueueResult::Queued => Ok(SubmitResult::Accepted),
+                    InputQueueResult::WouldBlock => {
+                        Ok(SubmitResult::Backpressure(DecodeInput::EndOfStream))
+                    }
+                }
+            }
+            DecodeInput::Packet(packet) => {
+                if packet.track_id() != self.track_id {
+                    return Err(AndroidVideoDecoderError::UnexpectedTrack {
+                        expected: self.track_id,
+                        actual: packet.track_id(),
+                    });
+                }
+                let Some(packet_pts) = packet.pts() else {
+                    return Err(AndroidVideoDecoderError::MissingPts);
+                };
+                if self.needs_keyframe && !packet.is_keyframe() {
+                    return Ok(SubmitResult::Accepted);
+                }
+                if !self.try_restore_codec_config()? {
+                    return Ok(SubmitResult::Backpressure(DecodeInput::Packet(packet)));
+                }
+
+                let presentation_time_us = self.map_input_timestamp(packet_pts)?;
+                let queue_result = self
+                    .session
+                    .with_codec(|codec| codec.try_queue_data(packet.data(), presentation_time_us))
+                    .map_err(|error| AndroidVideoDecoderError::Session { source: error })?;
+                match queue_result {
+                    InputQueueResult::Queued => {
+                        self.needs_keyframe = false;
+                        Ok(SubmitResult::Accepted)
+                    }
+                    InputQueueResult::WouldBlock => {
+                        Ok(SubmitResult::Backpressure(DecodeInput::Packet(packet)))
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn submit(
+        &mut self,
+        input: DecodeInput,
+    ) -> Result<SubmitResult, AndroidVideoDecoderError> {
+        if self.failed {
+            return Err(AndroidVideoDecoderError::InvalidState);
+        }
+        let result = self.submit_inner(input);
+
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
+    pub(crate) fn receive(
+        &mut self,
+    ) -> Result<ReceiveResult<AndroidVideoBuffer>, AndroidVideoDecoderError> {
         if self.failed {
             return Err(AndroidVideoDecoderError::InvalidState);
         }
@@ -159,5 +314,44 @@ impl AndroidVideoDecoder {
             self.failed = true;
         }
         result
+    }
+
+    pub(crate) fn flush(&mut self) -> Result<(), AndroidVideoDecoderError> {
+        if self.failed {
+            return Err(AndroidVideoDecoderError::InvalidState);
+        }
+        let codec_config_pending = self.codec_config_pending;
+        let result = self.session.with_codec(|codec| {
+            let needs_codec_config = codec_config_pending || !codec.has_output_started();
+            match codec.flush() {
+                Ok(_) => Ok(needs_codec_config),
+                Err(error) => Err(error),
+            }
+        });
+        let needs_codec_config = result.map_err(|error| {
+            self.failed = true;
+            AndroidVideoDecoderError::Session { source: error }
+        })?;
+        self.codec_config_pending = needs_codec_config;
+        self.timestamp_offset_us = None;
+        self.needs_keyframe = true;
+        Ok(())
+    }
+}
+
+impl Decoder for AndroidVideoDecoder {
+    type Output = AndroidVideoBuffer;
+
+    fn submit(&mut self, input: DecodeInput) -> Result<SubmitResult, DecodeError> {
+        AndroidVideoDecoder::submit(self, input)
+            .map_err(AndroidVideoDecoderError::into_decode_error)
+    }
+
+    fn receive(&mut self) -> Result<ReceiveResult<Self::Output>, DecodeError> {
+        AndroidVideoDecoder::receive(self).map_err(AndroidVideoDecoderError::into_decode_error)
+    }
+
+    fn flush(&mut self) -> Result<(), DecodeError> {
+        AndroidVideoDecoder::flush(self).map_err(AndroidVideoDecoderError::into_decode_error)
     }
 }
