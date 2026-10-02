@@ -101,7 +101,7 @@ pub(crate) enum CodecOutput {
 /// 注意：它目前不是自动归还槽位的 RAII 对象。
 #[derive(Debug)]
 #[must_use = "Surface 输出凭据需要用于呈现或丢弃；flush 会使其失效"]
-struct SurfaceOutputToken {
+pub(crate) struct SurfaceOutputToken {
     // 不需要保存数字，只需要一个独立的共享对象来标识本次领取。
     identity: Rc<()>,
     presentation_time_us: i64,
