@@ -6,3 +6,4 @@ mod monotonic_clock;
 
 pub use av_sync::{AvSync, AvSyncError, VideoSyncDecision};
 pub use clock::{AudioClock, ClockError, ClockSnapshot};
+pub(crate) use monotonic_clock::MonotonicClock;

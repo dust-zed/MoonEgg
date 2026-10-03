@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::{
     media::{
         AudioBuffer, AudioPcmFormat, MediaTime, Packet, Rounding, TimeError, TrackFormat, TrackId,
@@ -9,7 +11,7 @@ use crate::{
         video::{self, VideoBranch, VideoEnqueueResult, VideoPipelineError},
     },
     ports::{AudioOutput, AudioPlaybackPosition, Decoder, DemuxError, Demuxer, ReadPacketResult},
-    timing::{AudioClock, ClockError, ClockSnapshot},
+    timing::{AudioClock, ClockError, ClockSnapshot, MonotonicClock},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +66,7 @@ enum PlaybackClockState {
         anchor_played_frames: u64,
     },
     Ready(AudioClock),
+    Monotonic(MonotonicClock),
 }
 
 impl PlaybackClockState {
@@ -78,10 +81,22 @@ impl PlaybackClockState {
         *self = Self::new(anchor_media, anchor_played_frames)
     }
 
+    fn switch_to_monotonic(&mut self, snapshot: ClockSnapshot) {
+        *self = match self {
+            PlaybackClockState::Monotonic(_) => return,
+            _ => {
+                let mut monotonic_clock = MonotonicClock::new(snapshot.media_time());
+                monotonic_clock.resume(snapshot.observed_at());
+                PlaybackClockState::Monotonic(monotonic_clock)
+            }
+        };
+    }
+
     fn snapshot(
         &mut self,
         format: Option<AudioPcmFormat>,
         position: AudioPlaybackPosition,
+        now: Instant,
     ) -> Result<ClockSnapshot, ClockError> {
         match self {
             Self::WaitingForFormat {
@@ -98,6 +113,21 @@ impl PlaybackClockState {
                 Ok(snapshot)
             }
             Self::Ready(clock) => clock.snapshot(position),
+            Self::Monotonic(clock) => clock.snapshot(now),
+        }
+    }
+
+    fn pause(&mut self, now: Instant) -> Result<(), ClockError> {
+        match self {
+            PlaybackClockState::Monotonic(monotonic) => monotonic.pause(now),
+            _ => return Ok(()),
+        }
+    }
+
+    fn resume(&mut self, now: Instant) {
+        match self {
+            PlaybackClockState::Monotonic(monotonic) => monotonic.resume(now),
+            _ => {}
         }
     }
 }
@@ -360,11 +390,24 @@ where
     }
 
     pub fn start(&mut self) -> Result<(), PlaybackPipelineError> {
-        self.audio.start().map_err(PlaybackPipelineError::Audio)
+        match self.audio.start() {
+            Ok(_) => {
+                let now = Instant::now();
+                self.clock.resume(now);
+                Ok(())
+            }
+            Err(error) => Err(PlaybackPipelineError::Audio(error)),
+        }
     }
 
     pub fn pause(&mut self) -> Result<(), PlaybackPipelineError> {
-        self.audio.pause().map_err(PlaybackPipelineError::Audio)
+        match self.audio.pause() {
+            Ok(_) => {
+                let now = Instant::now();
+                self.clock.pause(now).map_err(PlaybackPipelineError::Clock)
+            }
+            Err(error) => Err(PlaybackPipelineError::Audio(error)),
+        }
     }
 
     pub const fn epoch(&self) -> PlaybackEpoch {
@@ -423,7 +466,7 @@ where
         let position = self.playback_position()?;
         let format = self.audio.output_format();
         self.clock
-            .snapshot(format, position)
+            .snapshot(format, position, Instant::now())
             .map_err(PlaybackPipelineError::Clock)
     }
 
