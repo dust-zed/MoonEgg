@@ -5,6 +5,8 @@ use crate::{
     pipeline::{
         EpochItem, PlaybackEpoch,
         audio::{AudioEnqueueResult, AudioPipeline, AudioPipelineError, AudioStepResult},
+        playback,
+        video::{self, VideoBranch, VideoEnqueueResult, VideoPipelineError},
     },
     ports::{AudioOutput, AudioPlaybackPosition, Decoder, DemuxError, Demuxer, ReadPacketResult},
     timing::{AudioClock, ClockError, ClockSnapshot},
@@ -27,12 +29,15 @@ pub enum PlaybackStepResult {
 pub enum PlaybackPipelineError {
     Demux(DemuxError),
     Audio(AudioPipelineError),
+    Video(VideoPipelineError),
     Clock(ClockError),
     Time(TimeError),
 
     TrackNotFound,
     NotAudioTrack,
     NoAudioTrack,
+
+    NotVideoTrack,
 
     EpochMismatch {
         expected: PlaybackEpoch,
@@ -100,6 +105,7 @@ impl PlaybackClockState {
 pub struct PlaybackPipeline<X, D, O> {
     demuxer: X,
     audio: AudioPipeline<D, O>,
+    video: Option<Box<dyn VideoBranch>>,
 
     audio_track: TrackId,
     epoch: PlaybackEpoch,
@@ -171,6 +177,7 @@ where
         Ok(Self {
             demuxer,
             audio,
+            video: None,
             audio_track,
             epoch,
             clock,
@@ -181,24 +188,93 @@ where
         })
     }
 
+    pub(crate) fn new_with_video<V>(
+        demuxer: X,
+        decoder: D,
+        output: O,
+        audio_track: TrackId,
+        epoch: PlaybackEpoch,
+        packet_capacity: usize,
+        mut video: V,
+    ) -> Result<Self, PlaybackPipelineError>
+    where
+        V: VideoBranch + 'static,
+    {
+        let track = demuxer
+            .tracks()
+            .iter()
+            .find(|&track| track.id() == video.track_id())
+            .ok_or(PlaybackPipelineError::TrackNotFound)?;
+        if epoch != video.epoch() {
+            return Err(PlaybackPipelineError::EpochMismatch {
+                expected: epoch,
+                actual: video.epoch(),
+            });
+        }
+
+        let TrackFormat::Video(_) = track.format() else {
+            return Err(PlaybackPipelineError::NotVideoTrack);
+        };
+
+        let mut playback = Self::new(
+            demuxer,
+            decoder,
+            output,
+            audio_track,
+            epoch,
+            packet_capacity,
+        )?;
+        video.set_presentation_boundary(playback.media_start);
+        playback.video = Some(Box::new(video));
+        Ok(playback)
+    }
+
     fn dispatch_pending_packet(&mut self) -> Result<bool, PlaybackPipelineError> {
         let Some(item) = self.pending_packet.take() else {
             return Ok(false);
         };
 
-        match self
-            .audio
-            .try_push_packet(item)
-            .map_err(PlaybackPipelineError::Audio)?
-        {
-            AudioEnqueueResult::Accepted => Ok(true),
+        let track_id = item.value().track_id();
 
-            AudioEnqueueResult::Backpressure(item) => {
+        if self.audio_track == track_id {
+            return match self
+                .audio
+                .try_push_packet(item)
+                .map_err(PlaybackPipelineError::Audio)?
+            {
+                AudioEnqueueResult::Accepted => Ok(true),
+
+                AudioEnqueueResult::Backpressure(item) => {
+                    self.pending_packet = Some(item);
+                    Ok(false)
+                }
+
+                AudioEnqueueResult::EpochMismatch(item) => {
+                    Err(PlaybackPipelineError::EpochMismatch {
+                        expected: self.epoch,
+                        actual: item.epoch(),
+                    })
+                }
+            };
+        }
+        let Some(video) = self.video.as_mut() else {
+            return Ok(true);
+        };
+
+        if track_id != video.track_id() {
+            return Ok(true);
+        }
+
+        match video
+            .try_push_packet(item)
+            .map_err(PlaybackPipelineError::Video)?
+        {
+            VideoEnqueueResult::Accepted => Ok(true),
+            VideoEnqueueResult::Backpressure(item) => {
                 self.pending_packet = Some(item);
                 Ok(false)
             }
-
-            AudioEnqueueResult::EpochMismatch(item) => Err(PlaybackPipelineError::EpochMismatch {
+            VideoEnqueueResult::EpochMismatch(item) => Err(PlaybackPipelineError::EpochMismatch {
                 expected: self.epoch,
                 actual: item.epoch(),
             }),
@@ -222,10 +298,6 @@ where
             .map_err(PlaybackPipelineError::Demux)?
         {
             ReadPacketResult::Packet(packet) => {
-                if packet.track_id() != self.audio_track {
-                    return Ok(true);
-                }
-
                 self.pending_packet = Some(EpochItem::new(self.epoch, packet));
 
                 // 尝试立即交给音频分支。
@@ -239,16 +311,32 @@ where
             ReadPacketResult::NotReady => Ok(false),
 
             ReadPacketResult::EndOfStream => {
-                if !self.audio.end_input(self.epoch) {
-                    return Err(PlaybackPipelineError::EpochMismatch {
-                        expected: self.epoch,
-                        actual: self.audio.epoch(),
-                    });
-                }
+                self.end_selected_inputs()?;
+
                 self.source_phase = SourcePhase::Ended;
                 Ok(true)
             }
         }
+    }
+
+    fn end_selected_inputs(&mut self) -> Result<(), PlaybackPipelineError> {
+        if !self.audio.end_input(self.epoch) {
+            return Err(PlaybackPipelineError::EpochMismatch {
+                expected: self.epoch,
+                actual: self.audio.epoch(),
+            });
+        }
+
+        if let Some(video) = self.video.as_mut()
+            && !video.end_input(self.epoch)
+        {
+            return Err(PlaybackPipelineError::EpochMismatch {
+                expected: self.epoch,
+                actual: video.epoch(),
+            });
+        }
+
+        Ok(())
     }
 
     pub fn step(&mut self) -> Result<PlaybackStepResult, PlaybackPipelineError> {
@@ -310,6 +398,13 @@ where
             .playback_position()
             .map_err(PlaybackPipelineError::Audio)?;
         let presentation_boundary = self.media_start.max(landed);
+
+        if let Some(video) = self.video.as_mut() {
+            video
+                .reset(new_epoch)
+                .map_err(PlaybackPipelineError::Video)?;
+            video.set_presentation_boundary(presentation_boundary);
+        }
         self.audio.set_presentation_boundary(presentation_boundary);
         self.clock
             .reanchor(presentation_boundary, position.played_frames());
@@ -343,8 +438,14 @@ where
     }
 
     pub fn is_finished(&mut self) -> Result<bool, PlaybackPipelineError> {
-        self.audio
+        let audio_finished = self
+            .audio
             .is_finished()
-            .map_err(PlaybackPipelineError::Audio)
+            .map_err(PlaybackPipelineError::Audio)?;
+        let video_drained = match self.video.as_ref() {
+            Some(video) => video.is_decoder_drained(),
+            None => true,
+        };
+        Ok(audio_finished && video_drained)
     }
 }
