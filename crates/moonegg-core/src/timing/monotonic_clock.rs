@@ -5,6 +5,7 @@ use crate::{
     timing::{ClockError, ClockSnapshot},
 };
 
+#[derive(Debug)]
 pub(crate) struct MonotonicClock {
     anchor_media: MediaTime,
     anchor_instant: Option<Instant>,
