@@ -85,4 +85,5 @@ pub enum ClockError {
     InvalidSampleRate,
     PositionWentBackward,
     Overflow,
+    ObservationFromFuture,
 }

@@ -6,6 +6,8 @@ mod deferred_audio_output;
 mod epoch;
 mod playback;
 mod queue;
+mod video;
+
 pub(crate) use coordinator::{
     CoordinateVideoError, VideoDiscardReason, VideoStepResult, coordinate_video_frame,
 };
