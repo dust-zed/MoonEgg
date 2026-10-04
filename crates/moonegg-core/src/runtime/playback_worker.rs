@@ -153,24 +153,24 @@ where
             return;
         }
 
-        let mut should_wait = true;
+        let mut wait_duration = RETRY_INTERVAL;
 
         loop {
             if self.cancel.is_canceled() {
                 break;
             }
 
-            let command = if should_wait {
-                match self.commands.recv_timeout(RETRY_INTERVAL) {
-                    Ok(command) => Some(command),
-                    Err(RecvTimeoutError::Timeout) => None,
-                    Err(RecvTimeoutError::Disconnected) => break,
-                }
-            } else {
+            let command = if wait_duration.is_zero() {
                 match self.commands.try_recv() {
                     Ok(command) => Some(command),
                     Err(TryRecvError::Empty) => None,
                     Err(TryRecvError::Disconnected) => break,
+                }
+            } else {
+                match self.commands.recv_timeout(wait_duration) {
+                    Ok(command) => Some(command),
+                    Err(RecvTimeoutError::Timeout) => None,
+                    Err(RecvTimeoutError::Disconnected) => break,
                 }
             };
 
@@ -178,17 +178,20 @@ where
                 break;
             }
 
-            let now = Instant::now();
+            // 先恢复默认等待时间。
+            // 本轮如果提前 continue，下一轮仍然会等待，避免空转。
+            wait_duration = RETRY_INTERVAL;
 
-            if let Some(command) = command {
-                if let Err(error) = self.apply_command(command) {
-                    if !self.report_failure(error) {
-                        break;
-                    }
-                    should_wait = true;
-                    continue;
+            if let Some(command) = command
+                && let Err(error) = self.apply_command(command)
+            {
+                if !self.report_failure(error) {
+                    break;
                 }
+                continue;
             }
+
+            let now = Instant::now();
 
             if now.duration_since(last_progress_report) >= PROGRESS_INTERVAL {
                 last_progress_report = now;
@@ -201,7 +204,6 @@ where
                             if !self.report_failure(PlaybackError::Pipeline(error)) {
                                 break;
                             }
-                            should_wait = true;
                             continue;
                         }
                     };
@@ -224,50 +226,54 @@ where
                     if !self.report_failure(error) {
                         break;
                     }
-                    should_wait = true;
                     continue;
                 }
             }
 
             if !self.running || self.decoder_drained {
-                should_wait = true;
                 continue;
             }
 
             let Some(pipeline) = self.pipeline.as_mut() else {
-                should_wait = true;
                 continue;
             };
 
             if self.cancel.is_canceled() {
                 break;
             }
-
+            // 每轮只调用一次 step，保留并处理这一次的结果。
             match pipeline.step() {
-                Ok(PlaybackStepResult::Progress) => {
-                    should_wait = false;
-                }
-
-                Ok(PlaybackStepResult::Blocked) => {
-                    should_wait = true;
-                }
-
-                Ok(PlaybackStepResult::DecoderDrained) => {
-                    self.decoder_drained = true;
-                    should_wait = true;
+                Ok(step_result) => {
+                    if matches!(step_result, PlaybackStepResult::DecoderDrained) {
+                        self.decoder_drained = true;
+                    }
+                    wait_duration = Self::retry_delay(step_result, Instant::now(), RETRY_INTERVAL);
                 }
 
                 Err(error) => {
                     if !self.report_failure(PlaybackError::Pipeline(error)) {
                         break;
                     }
-                    should_wait = true;
                 }
             }
         }
         self.close_pipeline();
     }
 
+    fn retry_delay(
+        step_result: PlaybackStepResult,
+        now: Instant,
+        retry_interval: Duration,
+    ) -> Duration {
+        match step_result {
+            PlaybackStepResult::Progress => Duration::ZERO,
+            PlaybackStepResult::Blocked | PlaybackStepResult::DecoderDrained => retry_interval,
+            PlaybackStepResult::WaitUntil { deadline } => {
+                let remaining = deadline.saturating_duration_since(now);
+                remaining.min(retry_interval)
+            }
+        }
+    }
     fn poll_completion(&mut self) -> Result<bool, PlaybackError> {
         if !self.running || !self.decoder_drained || self.completion_reported {
             return Ok(false);
