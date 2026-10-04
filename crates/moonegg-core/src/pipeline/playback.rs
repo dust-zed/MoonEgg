@@ -12,7 +12,9 @@ use crate::{
         },
     },
     ports::{AudioOutput, AudioPlaybackPosition, Decoder, DemuxError, Demuxer, ReadPacketResult},
-    timing::{AudioClock, AudioProgressTracker, ClockError, ClockSnapshot, MonotonicClock},
+    timing::{
+        AudioClock, AudioProgressTracker, AvSyncError, ClockError, ClockSnapshot, MonotonicClock,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +44,9 @@ pub enum PlaybackPipelineError {
     NoAudioTrack,
 
     NotVideoTrack,
+    NoVideoTrack,
+
+    Sync(AvSyncError),
 
     EpochMismatch {
         expected: PlaybackEpoch,

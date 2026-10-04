@@ -81,6 +81,7 @@ impl<R: Seek + Read> Read for BoundedReader<R> {
     }
 }
 
+#[derive(Debug)]
 pub enum FileSource {
     Path(PathBuf),
     Region { file: File, start: u64, length: u64 },

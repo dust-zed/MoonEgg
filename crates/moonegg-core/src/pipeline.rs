@@ -17,3 +17,4 @@ pub(crate) use playback::{
     PlaybackPipeline, PlaybackPipelineError, PlaybackStepResult, SeekOutcome,
 };
 pub(crate) use queue::{BoundedQueue, QueueError, QueuePushResult};
+pub(crate) use video::VideoPipeline;
