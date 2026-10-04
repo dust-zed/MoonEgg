@@ -25,6 +25,7 @@ enum SourcePhase {
 pub enum PlaybackStepResult {
     Progress,
     Blocked,
+    WaitUntil { deadline: Instant },
     DecoderDrained,
 }
 
@@ -560,6 +561,8 @@ where
 
         Ok(if progressed {
             PlaybackStepResult::Progress
+        } else if let VideoPipelineStepResult::WaitUntil { deadline } = video_result {
+            PlaybackStepResult::WaitUntil { deadline }
         } else {
             PlaybackStepResult::Blocked
         })
@@ -570,6 +573,7 @@ where
             Ok(_) => {
                 let now = Instant::now();
                 self.clock.resume(now);
+                self.audio_progress.reset();
                 Ok(())
             }
             Err(error) => Err(PlaybackPipelineError::Audio(error)),
@@ -580,7 +584,11 @@ where
         match self.audio.pause() {
             Ok(_) => {
                 let now = Instant::now();
-                self.clock.pause(now).map_err(PlaybackPipelineError::Clock)
+                self.clock
+                    .pause(now)
+                    .map_err(PlaybackPipelineError::Clock)?;
+                self.audio_progress.reset();
+                Ok(())
             }
             Err(error) => Err(PlaybackPipelineError::Audio(error)),
         }
@@ -627,6 +635,7 @@ where
         self.audio.set_presentation_boundary(presentation_boundary);
         self.clock
             .reanchor(presentation_boundary, position.played_frames());
+        self.audio_progress.reset();
 
         self.epoch = new_epoch;
         self.source_phase = SourcePhase::Reading;
