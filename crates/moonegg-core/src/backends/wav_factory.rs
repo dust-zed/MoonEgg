@@ -6,7 +6,7 @@ use crate::{
     media::TrackFormat,
     pipeline::{DeferredAudioOutput, PlaybackPipelineError},
     ports::{AudioOutputFactory, DemuxError},
-    runtime::{AudioPipelineFactory, CancellationToken},
+    runtime::{CancellationToken, PlaybackPipelineFactory},
     source::{BoundedReader, FileSource},
 };
 
@@ -24,7 +24,7 @@ impl<F> WavPlaybackFactory<F> {
     }
 }
 
-impl<F> AudioPipelineFactory for WavPlaybackFactory<F>
+impl<F> PlaybackPipelineFactory for WavPlaybackFactory<F>
 where
     F: AudioOutputFactory,
 {

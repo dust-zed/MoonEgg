@@ -13,9 +13,9 @@ use crate::{
     player::{PlayerCommand, PlayerEvent},
     ports::{AudioBackendFactory, AudioOutputFactory},
     runtime::{
-        AudioPipelineFactory, BackendPlaybackFactory, ControlLoop, ControlLoopExit, ControlMessage,
-        ControlResult, EffectExecutor, EffectLoopExit, PlaybackEffectExecutor, ShutdownReport,
-        ThreadTermination, run_effect_loop,
+        BackendPlaybackFactory, ControlLoop, ControlLoopExit, ControlMessage, ControlResult,
+        EffectExecutor, EffectLoopExit, PlaybackEffectExecutor, PlaybackPipelineFactory,
+        ShutdownReport, ThreadTermination, run_effect_loop,
     },
     source::FileSource,
 };
@@ -139,7 +139,7 @@ impl PlayerEngine {
 
     pub(crate) fn new_audio<F>(factory: F) -> io::Result<Self>
     where
-        F: AudioPipelineFactory,
+        F: PlaybackPipelineFactory,
     {
         Self::new(PlaybackEffectExecutor::new(factory))
     }

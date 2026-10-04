@@ -5,6 +5,7 @@ mod audio_output;
 mod audio_output_factory;
 mod decoder;
 mod demuxer;
+mod video_backend_factory;
 mod video_output;
 
 pub use audio_backend_factory::AudioBackendFactory;
@@ -12,4 +13,5 @@ pub use audio_output::{AudioOutput, AudioOutputError, AudioPlaybackPosition, Aud
 pub use audio_output_factory::AudioOutputFactory;
 pub use decoder::{DecodeError, DecodeInput, Decoder, ReceiveResult, SubmitResult};
 pub use demuxer::{DemuxError, Demuxer, ReadPacketResult};
+pub use video_backend_factory::{VideoBackendError, VideoBackendFactory};
 pub use video_output::{VideoOutput, VideoOutputError, VideoSubmitResult};

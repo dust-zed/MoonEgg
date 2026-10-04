@@ -5,7 +5,7 @@ use crate::{
     runtime::{
         ControlEffect, EffectExecutor,
         effect_executor::EffectFeedback,
-        pipeline_factory::AudioPipelineFactory,
+        pipeline_factory::PlaybackPipelineFactory,
         playback_worker::{PlaybackWorkerAction, PlaybackWorkerHandle, spawn_playback_worker},
         worker,
     },
@@ -18,7 +18,7 @@ pub(crate) struct PlaybackEffectExecutor<F> {
 
 impl<F> PlaybackEffectExecutor<F>
 where
-    F: AudioPipelineFactory,
+    F: PlaybackPipelineFactory,
 {
     pub(crate) fn new(factory: F) -> Self {
         Self {
@@ -66,7 +66,7 @@ where
 
 impl<F> EffectExecutor for PlaybackEffectExecutor<F>
 where
-    F: AudioPipelineFactory,
+    F: PlaybackPipelineFactory,
 {
     fn execute(
         &mut self,
