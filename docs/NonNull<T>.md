@@ -46,4 +46,5 @@ let inner = NonNull::new(raw)
 | `*mut T` | 否 | 否 |
 | `NonNull<T>` | 是 | 否 |
 | `Box<T>` | 是 | 是，按 Rust 的所有权和分配规则释放 |
+
 因此我们需要自己写 Drop。自动清理的能力来自 `NativeMediaExtractor` 的 `Drop`，并不是来自 `NonNull`。
