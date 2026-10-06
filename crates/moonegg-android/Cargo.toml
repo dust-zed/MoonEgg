@@ -10,5 +10,6 @@ moonegg-core = { path = "../moonegg-core" }
 [target.'cfg(target_os = "android")'.dependencies]
 ndk = { version = "0.9", default-features = false, features = ["audio", "api-level-33", "media"] }
 ndk-sys = { version = "0.6.0", features = ["media"] }
+jni-sys = "0.3"
 thiserror.workspace = true
 libc = "0.2"

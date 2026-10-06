@@ -14,3 +14,5 @@ thiserror = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 moonegg-android = { path = "../moonegg-android" }
+ndk = { version = "0.9", default-features = false }
+jni = "0.21.1"
