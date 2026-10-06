@@ -12,7 +12,9 @@ pub(crate) use control_loop::{
     ControlEffect, ControlLoop, ControlLoopExit, ControlMessage, ControlResult,
 };
 pub(crate) use effect_executor::{EffectExecutor, EffectLoopExit, run_effect_loop};
-pub(crate) use pipeline_factory::{BackendPlaybackFactory, PlaybackPipelineFactory};
+pub(crate) use pipeline_factory::{
+    AvBackendPlaybackFactory, BackendPlaybackFactory, PlaybackPipelineFactory,
+};
 pub(crate) use playback_executor::PlaybackEffectExecutor;
 pub use shutdown::ShutdownReport;
 pub(crate) use shutdown::ThreadTermination;

@@ -50,12 +50,22 @@ mod video_output;
 mod av_backend_factory;
 
 #[cfg(target_os = "android")]
+mod video_surface;
+
+#[cfg(target_os = "android")]
 pub use audio_output::{AndroidAudioOutput, AndroidAudioOutputFactory};
+#[cfg(target_os = "android")]
+pub use video_surface::{VideoSurfaceError, acquire_native_window};
 
 #[cfg(target_os = "android")]
 pub use file_source::duplicate_file_descriptor;
 #[cfg(target_os = "android")]
-use moonegg_core::PlayerEngine;
+use moonegg_core::{FileSource, PlayerEngine};
+#[cfg(target_os = "android")]
+use ndk::native_window::NativeWindow;
+
+#[cfg(target_os = "android")]
+use crate::av_backend_factory::AndroidAvBackendFactory;
 
 #[cfg(target_os = "android")]
 pub fn new_aac_player(
@@ -63,5 +73,19 @@ pub fn new_aac_player(
 ) -> std::io::Result<moonegg_core::PlayerEngine> {
     let backend_factory = audio_backend_factory::AndroidAudioBackendFactory::new(source);
     let engine = PlayerEngine::new_with_backend(backend_factory, AndroidAudioOutputFactory)?;
+    Ok(engine)
+}
+
+/// 创建面向指定窗口的本地音视频播放器，
+///
+/// 返回成功表示运行时已创建
+/// 媒体轨道和解码器的错误在 prepare 阶段报告
+#[cfg(target_os = "android")]
+pub fn new_av_player(
+    source: FileSource,
+    output_window: NativeWindow,
+) -> std::io::Result<PlayerEngine> {
+    let backend_factory = AndroidAvBackendFactory::new(source, output_window);
+    let engine = PlayerEngine::new_with_av_backend(backend_factory, AndroidAudioOutputFactory)?;
     Ok(engine)
 }

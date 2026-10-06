@@ -11,11 +11,11 @@ use std::{
 use crate::{
     backends::{SimulatedAudioOutputFactory, WavPlaybackFactory},
     player::{PlayerCommand, PlayerEvent},
-    ports::{AudioBackendFactory, AudioOutputFactory},
+    ports::{AudioBackendFactory, AudioOutputFactory, VideoBackendFactory},
     runtime::{
-        BackendPlaybackFactory, ControlLoop, ControlLoopExit, ControlMessage, ControlResult,
-        EffectExecutor, EffectLoopExit, PlaybackEffectExecutor, PlaybackPipelineFactory,
-        ShutdownReport, ThreadTermination, run_effect_loop,
+        AvBackendPlaybackFactory, BackendPlaybackFactory, ControlLoop, ControlLoopExit,
+        ControlMessage, ControlResult, EffectExecutor, EffectLoopExit, PlaybackEffectExecutor,
+        PlaybackPipelineFactory, ShutdownReport, ThreadTermination, run_effect_loop,
     },
     source::FileSource,
 };
@@ -93,6 +93,16 @@ impl PlayerEngine {
     {
         let factory = BackendPlaybackFactory::new(backend, output_factory);
         Self::new_audio(factory)
+    }
+
+    pub fn new_with_av_backend<B, F>(backend: B, output_factory: F) -> io::Result<Self>
+    where
+        B: VideoBackendFactory,
+        F: AudioOutputFactory,
+    {
+        let factory = AvBackendPlaybackFactory::new(backend, output_factory);
+        let engine = Self::new_audio(factory)?;
+        Ok(engine)
     }
 
     pub fn send_command(&self, command: PlayerCommand) -> Result<(), SendError<ControlMessage>> {

@@ -1,5 +1,10 @@
 mod event;
 mod player;
+#[cfg(target_os = "android")]
+mod surface_registry;
+
+#[cfg(target_os = "android")]
+mod surface_jni;
 
 pub use player::{NativePlayer, PlayerBridgeError};
 

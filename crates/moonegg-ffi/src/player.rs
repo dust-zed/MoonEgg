@@ -3,6 +3,11 @@ use std::{
     sync::{Arc, Mutex, mpsc::TryRecvError},
 };
 
+#[cfg(target_os = "android")]
+use moonegg_android::new_av_player;
+
+#[cfg(target_os = "android")]
+use crate::surface_registry::take_window;
 use moonegg_core::{PlayerCommand, PlayerEngine, media::MediaTime};
 
 use crate::event::NativeEvent;
@@ -29,6 +34,8 @@ pub enum PlayerBridgeError {
     InvalidFileDescriptor { fd: i32 },
     #[error("无效的输入范围： offset={offset}, length={length}")]
     InvalidSourceRange { offset: i64, length: i64 },
+    #[error("访问视频窗口句柄失败： {reason}")]
+    SurfaceRegistryFailed { reason: String },
 }
 
 #[derive(uniffi::Object)]
@@ -220,6 +227,34 @@ impl NativePlayer {
             engine: Mutex::new(Some(engine)),
         };
         Ok(Arc::new(player))
+    }
+
+    /// 领取窗口句柄并创建音视频播放器
+    ///
+    /// 窗口领取成功后，句柄即失效；后续创建失败也不放回
+    #[uniffi::constructor]
+    pub fn from_av_file_descriptor(
+        fd: i32,
+        offset: i64,
+        length: i64,
+        surface_handle: i64,
+    ) -> Result<Arc<Self>, PlayerBridgeError> {
+        let output_window = take_window(surface_handle).map_err(|error| {
+            PlayerBridgeError::SurfaceRegistryFailed {
+                reason: error.to_string(),
+            }
+        })?;
+        let source = Self::source_from_file_descriptor(fd, offset, length)?;
+        let engine = new_av_player(source, output_window).map_err(|error| {
+            PlayerBridgeError::CreatedFailed {
+                reason: error.to_string(),
+            }
+        })?;
+        let player = Self {
+            engine: Mutex::new(Some(engine)),
+        };
+        let player = Arc::new(player);
+        Ok(player)
     }
 }
 
