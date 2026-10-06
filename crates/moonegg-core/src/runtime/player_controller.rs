@@ -2,11 +2,7 @@ use crate::{
     PlayerCommand, PlayerEvent, PlayerState,
     pipeline::PlaybackEpoch,
     player::StateAction,
-    runtime::{
-        ControlEffect,
-        control_loop::{ControlError, ControlOutcome},
-        worker::WorkerEvent,
-    },
+    runtime::{ControlEffect, ControlError, ControlOutcome, worker::WorkerEvent},
 };
 
 pub(crate) struct PlayerController {
@@ -181,7 +177,7 @@ impl PlayerController {
                 self.epoch = next_epoch;
 
                 Ok(ControlOutcome {
-                    effect: Some(ControlEffect::CleanupAfterFailure { epoch }),
+                    effect: Some(ControlEffect::CleanupAfterFailure { epoch: next_epoch }),
                     event: Some(PlayerEvent::PlaybackFailed { error }),
                 })
             }

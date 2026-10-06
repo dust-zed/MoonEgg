@@ -3,11 +3,13 @@ use std::sync::mpsc::{Receiver, Sender};
 use crate::{
     media::MediaTime,
     pipeline::{EpochError, PlaybackEpoch},
-    player::{InvalidTransition, PlayerCommand, PlayerEvent, PlayerState, StateAction},
-    runtime::{player_controller::PlayerController, worker::WorkerEvent},
+    player::{InvalidTransition, PlayerCommand, PlayerEvent, PlayerState},
+    runtime::{
+        control_types::{ControlError, ControlMessage, ControlOutcome, ControlResult},
+        player_controller::PlayerController,
+        worker::WorkerEvent,
+    },
 };
-
-pub type ControlResult = Result<ControlOutcome, ControlError>;
 
 pub struct ControlLoop {
     controller: PlayerController,
@@ -22,6 +24,8 @@ impl ControlLoop {
 
     // 这里使用 mut self 而不是 &mut self 很重要：
     // 启动控制线程时，把整个 ControlLoop 所有权移动进线程，从此只有该线程能访问状态。
+    // 接管控制循环，在当前线程持续处理消息
+    // 控制器由该循环独占，通过消息接收外部请求
     pub fn run(
         mut self,
         message_receiver: Receiver<ControlMessage>,
@@ -67,79 +71,6 @@ impl ControlLoop {
             ControlMessage::WorkerEvent(event) => self.controller.handle_worker_event(event),
         }
     }
-}
-
-#[derive(Debug)]
-pub enum ControlMessage {
-    Command(PlayerCommand),
-    WorkerEvent(WorkerEvent),
-}
-
-#[derive(Debug)]
-pub enum ControlEffect {
-    BeginPrepare {
-        epoch: PlaybackEpoch,
-    },
-    StartPlayback {
-        epoch: PlaybackEpoch,
-    },
-    PausePlayback {
-        epoch: PlaybackEpoch,
-    },
-    Seek {
-        target: MediaTime,
-        epoch: PlaybackEpoch,
-    },
-    Stop {
-        epoch: PlaybackEpoch,
-    },
-    Release {
-        epoch: PlaybackEpoch,
-    },
-    CleanupAfterFailure {
-        epoch: PlaybackEpoch,
-    },
-}
-
-impl ControlEffect {
-    pub const fn epoch(&self) -> PlaybackEpoch {
-        match self {
-            Self::BeginPrepare { epoch }
-            | Self::StartPlayback { epoch }
-            | Self::PausePlayback { epoch }
-            | Self::Seek { epoch, .. }
-            | Self::Stop { epoch }
-            | Self::Release { epoch }
-            | Self::CleanupAfterFailure { epoch } => *epoch,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct ControlOutcome {
-    pub effect: Option<ControlEffect>,
-    pub event: Option<PlayerEvent>,
-}
-
-impl ControlOutcome {
-    pub fn none() -> Self {
-        Self {
-            effect: None,
-            event: None,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum ControlError {
-    CommandRejected {
-        command: PlayerCommand,
-        transition: InvalidTransition,
-    },
-    UnexpectedWorkEvent {
-        transition: InvalidTransition,
-    },
-    Epoch(EpochError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

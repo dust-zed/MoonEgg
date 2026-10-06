@@ -5,9 +5,9 @@ use std::{
 };
 
 use crate::{
-    error::{self, PlaybackError, RuntimeError},
+    error::{PlaybackError, RuntimeError},
     media::{AudioBuffer, MediaTime},
-    pipeline::{self, PlaybackEpoch, PlaybackPipeline, PlaybackPipelineError, PlaybackStepResult},
+    pipeline::{PlaybackEpoch, PlaybackPipeline, PlaybackStepResult},
     ports::{AudioOutput, Decoder, Demuxer},
     runtime::{
         effect_executor::EffectFeedback,

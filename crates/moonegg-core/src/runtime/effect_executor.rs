@@ -5,11 +5,7 @@ use crate::{
     media::MediaTime,
     pipeline::PlaybackEpoch,
     player::PlayerEvent,
-    runtime::{
-        ControlMessage, ControlResult,
-        control_loop::{ControlEffect, ControlError},
-        worker::WorkerEvent,
-    },
+    runtime::{ControlEffect, ControlError, ControlMessage, ControlResult, worker::WorkerEvent},
 };
 
 pub trait EffectExecutor: Send {
