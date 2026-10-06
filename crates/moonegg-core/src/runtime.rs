@@ -5,6 +5,7 @@ mod effect_executor;
 mod pipeline_factory;
 mod playback_executor;
 mod playback_worker;
+mod player_controller;
 mod shutdown;
 mod worker;
 

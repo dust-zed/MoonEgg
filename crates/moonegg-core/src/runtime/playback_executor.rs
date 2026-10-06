@@ -7,7 +7,6 @@ use crate::{
         effect_executor::EffectFeedback,
         pipeline_factory::PlaybackPipelineFactory,
         playback_worker::{PlaybackWorkerAction, PlaybackWorkerHandle, spawn_playback_worker},
-        worker,
     },
 };
 
