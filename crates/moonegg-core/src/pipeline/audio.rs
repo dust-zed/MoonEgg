@@ -342,3 +342,83 @@ where
         )))
     }
 }
+
+impl<D, O> AudioBranch for AudioPipeline<D, O>
+where
+    D: Decoder<Output = AudioBuffer>,
+    O: AudioOutput,
+{
+    fn epoch(&self) -> PlaybackEpoch {
+        AudioPipeline::epoch(self)
+    }
+
+    fn track_id(&self) -> TrackId {
+        self.track_id
+    }
+
+    fn try_push_packet(
+        &mut self,
+        item: EpochItem<Packet>,
+    ) -> Result<AudioEnqueueResult, AudioPipelineError> {
+        AudioPipeline::try_push_packet(self, item)
+    }
+
+    fn end_input(&mut self, epoch: PlaybackEpoch) -> bool {
+        AudioPipeline::end_input(self, epoch)
+    }
+
+    fn step(&mut self) -> Result<AudioStepResult, AudioPipelineError> {
+        AudioPipeline::step(self)
+    }
+
+    fn start(&mut self) -> Result<(), AudioPipelineError> {
+        AudioPipeline::start(self)
+    }
+
+    fn pause(&mut self) -> Result<(), AudioPipelineError> {
+        AudioPipeline::pause(self)
+    }
+
+    fn reset(&mut self, new_epoch: PlaybackEpoch) -> Result<(), AudioPipelineError> {
+        AudioPipeline::reset(self, new_epoch)
+    }
+
+    fn playback_position(&mut self) -> Result<AudioPlaybackPosition, AudioPipelineError> {
+        AudioPipeline::playback_position(self)
+    }
+
+    fn output_format(&self) -> Option<AudioPcmFormat> {
+        AudioPipeline::output_format(self)
+    }
+
+    fn is_finished(&mut self) -> Result<bool, AudioPipelineError> {
+        AudioPipeline::is_finished(self)
+    }
+
+    fn set_presentation_boundary(&mut self, boundary: MediaTime) {
+        AudioPipeline::set_presentation_boundary(self, boundary);
+    }
+}
+
+pub(crate) trait AudioBranch {
+    fn try_push_packet(
+        &mut self,
+        item: EpochItem<Packet>,
+    ) -> Result<AudioEnqueueResult, AudioPipelineError>;
+
+    fn epoch(&self) -> PlaybackEpoch;
+    fn track_id(&self) -> TrackId;
+    fn end_input(&mut self, epoch: PlaybackEpoch) -> bool;
+
+    fn step(&mut self) -> Result<AudioStepResult, AudioPipelineError>;
+    fn start(&mut self) -> Result<(), AudioPipelineError>;
+    fn pause(&mut self) -> Result<(), AudioPipelineError>;
+    fn reset(&mut self, new_epoch: PlaybackEpoch) -> Result<(), AudioPipelineError>;
+
+    fn playback_position(&mut self) -> Result<AudioPlaybackPosition, AudioPipelineError>;
+
+    fn output_format(&self) -> Option<AudioPcmFormat>;
+    fn is_finished(&mut self) -> Result<bool, AudioPipelineError>;
+
+    fn set_presentation_boundary(&mut self, boundary: MediaTime);
+}

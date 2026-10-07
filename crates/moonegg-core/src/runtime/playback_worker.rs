@@ -28,8 +28,8 @@ struct PlaybackWorkerCommand {
     feedback: EffectFeedback,
 }
 
-struct PlaybackWorker<X, D, O> {
-    pipeline: Option<PlaybackPipeline<X, D, O>>,
+struct PlaybackWorker<X> {
+    pipeline: Option<PlaybackPipeline<X>>,
     commands: Receiver<PlaybackWorkerCommand>,
     cancel: CancellationToken,
     feedback: EffectFeedback,
@@ -39,11 +39,9 @@ struct PlaybackWorker<X, D, O> {
     completion_reported: bool,
 }
 
-impl<X, D, O> PlaybackWorker<X, D, O>
+impl<X> PlaybackWorker<X>
 where
     X: Demuxer,
-    D: Decoder<Output = AudioBuffer>,
-    O: AudioOutput,
 {
     fn apply_command(&mut self, command: PlaybackWorkerCommand) -> Result<(), PlaybackError> {
         // 在执行操作前更新反馈上下文
@@ -338,18 +336,13 @@ impl Drop for PlaybackWorkerHandle {
     }
 }
 
-pub(crate) fn spawn_playback_worker<X, D, O, F>(
+pub(crate) fn spawn_playback_worker<X, F>(
     feedback: EffectFeedback,
     build: F,
 ) -> Result<PlaybackWorkerHandle, PlaybackError>
 where
     X: Demuxer + 'static,
-    D: Decoder<Output = AudioBuffer> + 'static,
-    O: AudioOutput + 'static,
-    F: FnOnce(
-            PlaybackEpoch,
-            &CancellationToken,
-        ) -> Result<PlaybackPipeline<X, D, O>, PlaybackError>
+    F: FnOnce(PlaybackEpoch, &CancellationToken) -> Result<PlaybackPipeline<X>, PlaybackError>
         + Send
         + 'static,
 {

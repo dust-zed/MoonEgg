@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use crate::{
     error::{PlaybackError, RuntimeError},
-    media::{AudioBuffer, MediaDelta, MediaTime, Rounding, TrackFormat, TrackInfo},
+    media::{AudioBuffer, MediaDelta, MediaTime, Rounding, Timestamp, TrackFormat, TrackInfo},
     pipeline::{
-        DeferredAudioOutput, PlaybackEpoch, PlaybackPipeline, PlaybackPipelineError, VideoPipeline,
+        AudioPipeline, DeferredAudioOutput, PlaybackEpoch, PlaybackPipeline, PlaybackPipelineError,
+        VideoPipeline,
     },
     ports::{
         AudioBackendFactory, AudioOutput, AudioOutputFactory, Decoder, Demuxer, VideoBackendError,
@@ -16,16 +17,8 @@ use crate::{
 
 pub(crate) trait PlaybackPipelineFactory: Send + Sync + 'static {
     type Demux: Demuxer + 'static;
-    type Decode: Decoder<Output = AudioBuffer> + 'static;
-    type Output: AudioOutput + 'static;
 
     fn open_demuxer(&self, cancel: &CancellationToken) -> Result<Self::Demux, PlaybackError>;
-
-    fn create_audio_components(
-        &self,
-        track: &TrackInfo,
-        cancel: &CancellationToken,
-    ) -> Result<(Self::Decode, Self::Output), PlaybackError>;
 
     fn packet_capacity(&self) -> usize;
 
@@ -34,33 +27,7 @@ pub(crate) trait PlaybackPipelineFactory: Send + Sync + 'static {
         &self,
         epoch: PlaybackEpoch,
         cancel: &CancellationToken,
-    ) -> Result<PlaybackPipeline<Self::Demux, Self::Decode, Self::Output>, PlaybackError> {
-        Self::check_canceled(cancel)?;
-        let demuxer = self.open_demuxer(cancel)?;
-
-        Self::check_canceled(cancel)?;
-
-        let track = demuxer
-            .tracks()
-            .iter()
-            .find(|track| matches!(track.format(), TrackFormat::Audio(_)))
-            .cloned()
-            .ok_or(PlaybackError::Pipeline(PlaybackPipelineError::NoAudioTrack))?;
-
-        let (decoder, output) = self.create_audio_components(&track, cancel)?;
-
-        Self::check_canceled(cancel)?;
-
-        PlaybackPipeline::new(
-            demuxer,
-            decoder,
-            output,
-            track.id(),
-            epoch,
-            self.packet_capacity(),
-        )
-        .map_err(PlaybackError::Pipeline)
-    }
+    ) -> Result<PlaybackPipeline<Self::Demux>, PlaybackError>;
 
     fn check_canceled(cancel: &CancellationToken) -> Result<(), PlaybackError> {
         if cancel.is_canceled() {
@@ -80,37 +47,23 @@ pub(crate) struct BackendPlaybackFactory<B, F> {
     output_factory: Arc<F>,
 }
 
-impl<B, F> BackendPlaybackFactory<B, F> {
+impl<B, F> BackendPlaybackFactory<B, F>
+where
+    B: AudioBackendFactory,
+    F: AudioOutputFactory,
+{
     pub(crate) fn new(backend: B, output_factory: F) -> Self {
         Self {
             backend,
             output_factory: Arc::new(output_factory),
         }
     }
-}
-
-impl<B, F> PlaybackPipelineFactory for BackendPlaybackFactory<B, F>
-where
-    B: AudioBackendFactory,
-    F: AudioOutputFactory,
-{
-    type Decode = B::Decode;
-    type Demux = B::Demux;
-    type Output = DeferredAudioOutput<Arc<F>>;
-
-    fn open_demuxer(&self, cancel: &CancellationToken) -> Result<Self::Demux, PlaybackError> {
-        Self::check_canceled(cancel)?;
-
-        let demuxer = self.backend.open_demuxer().map_err(PlaybackError::Demux)?;
-        Self::check_canceled(cancel)?;
-        Ok(demuxer)
-    }
 
     fn create_audio_components(
         &self,
         track: &TrackInfo,
         cancel: &CancellationToken,
-    ) -> Result<(Self::Decode, Self::Output), PlaybackError> {
+    ) -> Result<(B::Decode, DeferredAudioOutput<Arc<F>>), PlaybackError> {
         Self::check_canceled(cancel)?;
         let decoder = self
             .backend
@@ -120,6 +73,67 @@ where
 
         let deferred_output = DeferredAudioOutput::new(Arc::clone(&self.output_factory));
         Ok((decoder, deferred_output))
+    }
+}
+
+impl<B, F> PlaybackPipelineFactory for BackendPlaybackFactory<B, F>
+where
+    B: AudioBackendFactory,
+    F: AudioOutputFactory,
+{
+    type Demux = B::Demux;
+
+    fn open_demuxer(&self, cancel: &CancellationToken) -> Result<Self::Demux, PlaybackError> {
+        Self::check_canceled(cancel)?;
+
+        let demuxer = self.backend.open_demuxer().map_err(PlaybackError::Demux)?;
+        Self::check_canceled(cancel)?;
+        Ok(demuxer)
+    }
+
+    fn build(
+        &self,
+        epoch: PlaybackEpoch,
+        cancel: &CancellationToken,
+    ) -> Result<PlaybackPipeline<Self::Demux>, PlaybackError> {
+        Self::check_canceled(cancel)?;
+        let demuxer = self.open_demuxer(cancel)?;
+
+        Self::check_canceled(cancel)?;
+        let track = demuxer
+            .tracks()
+            .iter()
+            .find(|&track| matches!(track.format(), TrackFormat::Audio(_)))
+            .cloned()
+            .ok_or(PlaybackError::Pipeline(PlaybackPipelineError::NoAudioTrack))?;
+
+        let presentation_boundary = match track.start_time() {
+            Some(timestamp) => timestamp
+                .to_media_time(Rounding::TowardZero)
+                .map_err(|error| PlaybackError::Pipeline(PlaybackPipelineError::Time(error)))?,
+            None => MediaTime::from_nanoseconds(0),
+        };
+
+        let (decoder, output) = self.create_audio_components(&track, cancel)?;
+
+        let audio = AudioPipeline::new(
+            decoder,
+            output,
+            track.id(),
+            epoch,
+            self.packet_capacity(),
+            presentation_boundary,
+        )
+        .map_err(|error| PlaybackError::Pipeline(PlaybackPipelineError::Audio(error)))?;
+
+        Self::check_canceled(cancel)?;
+
+        let playback =
+            PlaybackPipeline::new(demuxer, audio, epoch).map_err(PlaybackError::Pipeline)?;
+
+        Self::check_canceled(cancel)?;
+
+        Ok(playback)
     }
 
     fn packet_capacity(&self) -> usize {
@@ -202,19 +216,9 @@ where
     F: AudioOutputFactory,
 {
     type Demux = B::Demux;
-    type Decode = B::Decode;
-    type Output = DeferredAudioOutput<Arc<F>>;
 
     fn open_demuxer(&self, cancel: &CancellationToken) -> Result<Self::Demux, PlaybackError> {
         self.audio_factory.open_demuxer(cancel)
-    }
-
-    fn create_audio_components(
-        &self,
-        track: &TrackInfo,
-        cancel: &CancellationToken,
-    ) -> Result<(Self::Decode, Self::Output), PlaybackError> {
-        self.audio_factory.create_audio_components(track, cancel)
     }
 
     fn packet_capacity(&self) -> usize {
@@ -226,7 +230,7 @@ where
         &self,
         epoch: PlaybackEpoch,
         cancel: &CancellationToken,
-    ) -> Result<PlaybackPipeline<Self::Demux, Self::Decode, Self::Output>, PlaybackError> {
+    ) -> Result<PlaybackPipeline<Self::Demux>, PlaybackError> {
         Self::check_canceled(cancel)?;
 
         // 音视频共用一个解复用器。
@@ -257,8 +261,21 @@ where
                 .map_err(|error| PlaybackError::Pipeline(PlaybackPipelineError::Time(error)))?,
             None => MediaTime::from_nanoseconds(0),
         };
-        let (audio_decoder, audio_output) = self.create_audio_components(&audio_track, cancel)?;
+        let (audio_decoder, audio_output) = self
+            .audio_factory
+            .create_audio_components(&audio_track, cancel)?;
 
+        let audio_pipeline = AudioPipeline::new(
+            audio_decoder,
+            audio_output,
+            audio_track.id(),
+            epoch,
+            self.packet_capacity(),
+            presentation_boundary,
+        )
+        .map_err(|error| PlaybackError::Pipeline(PlaybackPipelineError::Audio(error)))?;
+
+        Self::check_canceled(cancel)?;
         // 视频分支使用同一个 epoch 和 统一的展示边界。
         let video_pipeline =
             self.create_video_pipeline(&video_track, epoch, presentation_boundary, cancel)?;
@@ -268,16 +285,9 @@ where
         // 到这里，局部组件的所有权转移给总播放管线。
         // new_with_video 内部负责核对视频轨道和 epoch，
         // 并将视频分支保存到播放管线中。
-        let playback = PlaybackPipeline::new_with_video(
-            demuxer,
-            audio_decoder,
-            audio_output,
-            audio_track.id(),
-            epoch,
-            self.packet_capacity(),
-            video_pipeline,
-        )
-        .map_err(PlaybackError::Pipeline)?;
+        let playback =
+            PlaybackPipeline::new_with_video(demuxer, audio_pipeline, epoch, video_pipeline)
+                .map_err(PlaybackError::Pipeline)?;
 
         Self::check_canceled(cancel)?;
         Ok(playback)

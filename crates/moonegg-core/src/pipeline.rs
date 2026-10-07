@@ -8,6 +8,7 @@ mod playback;
 mod queue;
 mod video;
 
+pub(crate) use audio::AudioPipeline;
 pub(crate) use coordinator::{
     CoordinateVideoError, VideoDiscardReason, VideoStepResult, coordinate_video_frame,
 };

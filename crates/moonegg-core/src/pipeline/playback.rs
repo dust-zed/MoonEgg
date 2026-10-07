@@ -1,17 +1,13 @@
 use std::time::{Duration, Instant};
 
 use crate::{
-    media::{
-        AudioBuffer, AudioPcmFormat, MediaTime, Packet, Rounding, TimeError, TrackFormat, TrackId,
-    },
+    media::{AudioPcmFormat, MediaTime, Packet, Rounding, TimeError, TrackFormat, TrackId},
     pipeline::{
-        EpochItem, PlaybackEpoch, VideoStepResult,
-        audio::{AudioEnqueueResult, AudioPipeline, AudioPipelineError, AudioStepResult},
-        video::{
-            self, VideoBranch, VideoEnqueueResult, VideoPipelineError, VideoPipelineStepResult,
-        },
+        EpochItem, PlaybackEpoch,
+        audio::{AudioBranch, AudioEnqueueResult, AudioPipelineError, AudioStepResult},
+        video::{VideoBranch, VideoEnqueueResult, VideoPipelineError, VideoPipelineStepResult},
     },
-    ports::{AudioOutput, AudioPlaybackPosition, Decoder, DemuxError, Demuxer, ReadPacketResult},
+    ports::{AudioPlaybackPosition, DemuxError, Demuxer, ReadPacketResult},
     timing::{
         AudioClock, AudioProgressTracker, AvSyncError, ClockError, ClockSnapshot, MonotonicClock,
     },
@@ -232,9 +228,9 @@ impl PlaybackClockState {
     }
 }
 
-pub struct PlaybackPipeline<X, D, O> {
+pub struct PlaybackPipeline<X> {
     demuxer: X,
-    audio: AudioPipeline<D, O>,
+    audio: Box<dyn AudioBranch>,
     video: Option<Box<dyn VideoBranch>>,
 
     audio_track: TrackId,
@@ -249,37 +245,43 @@ pub struct PlaybackPipeline<X, D, O> {
     audio_progress: AudioProgressTracker,
 }
 
-impl<X, D, O> PlaybackPipeline<X, D, O>
+impl<X> PlaybackPipeline<X>
 where
     X: Demuxer,
-    D: Decoder<Output = AudioBuffer>,
-    O: AudioOutput,
 {
     const AUDIO_STALL_TIMEOUT: Duration = Duration::from_millis(200);
 
-    pub fn new(
+    pub fn new<A>(
         demuxer: X,
-        decoder: D,
-        output: O,
-        audio_track: TrackId,
+        mut audio: A,
         epoch: PlaybackEpoch,
-        packet_capacity: usize,
-    ) -> Result<Self, PlaybackPipelineError> {
+    ) -> Result<Self, PlaybackPipelineError>
+    where
+        A: AudioBranch + 'static,
+    {
+        if audio.epoch() != epoch {
+            return Err(PlaybackPipelineError::EpochMismatch {
+                expected: epoch,
+                actual: audio.epoch(),
+            });
+        }
+
+        let audio_track = audio.track_id();
+
         let track = demuxer
             .tracks()
             .iter()
             .find(|track| track.id() == audio_track)
+            .cloned()
             .ok_or(PlaybackPipelineError::TrackNotFound)?;
 
         let TrackFormat::Audio(_) = track.format() else {
-            return Err(PlaybackPipelineError::NoAudioTrack);
+            return Err(PlaybackPipelineError::NotAudioTrack);
         };
-
         let start_time = match track.start_time() {
             Some(timestamp) => timestamp
                 .to_media_time(Rounding::TowardZero)
                 .map_err(PlaybackPipelineError::Time)?,
-
             None => MediaTime::from_nanoseconds(0),
         };
 
@@ -292,15 +294,7 @@ where
             None => None,
         };
 
-        let mut audio = AudioPipeline::new(
-            decoder,
-            output,
-            audio_track,
-            epoch,
-            packet_capacity,
-            start_time,
-        )
-        .map_err(PlaybackPipelineError::Audio)?;
+        audio.set_presentation_boundary(start_time);
 
         let position = audio
             .playback_position()
@@ -310,7 +304,7 @@ where
 
         Ok(Self {
             demuxer,
-            audio,
+            audio: Box::new(audio),
             video: None,
             audio_track,
             epoch,
@@ -323,16 +317,14 @@ where
         })
     }
 
-    pub(crate) fn new_with_video<V>(
+    pub(crate) fn new_with_video<A, V>(
         demuxer: X,
-        decoder: D,
-        output: O,
-        audio_track: TrackId,
+        audio: A,
         epoch: PlaybackEpoch,
-        packet_capacity: usize,
         mut video: V,
     ) -> Result<Self, PlaybackPipelineError>
     where
+        A: AudioBranch + 'static,
         V: VideoBranch + 'static,
     {
         let track = demuxer
@@ -351,14 +343,7 @@ where
             return Err(PlaybackPipelineError::NotVideoTrack);
         };
 
-        let mut playback = Self::new(
-            demuxer,
-            decoder,
-            output,
-            audio_track,
-            epoch,
-            packet_capacity,
-        )?;
+        let mut playback = Self::new(demuxer, audio, epoch)?;
         video.set_presentation_boundary(playback.media_start);
         playback.video = Some(Box::new(video));
         Ok(playback)
