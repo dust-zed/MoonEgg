@@ -53,6 +53,7 @@ pub enum PlaybackPipelineError {
         current: PlaybackEpoch,
         requested: PlaybackEpoch,
     },
+    MissingAudioClockObservation,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -62,8 +63,22 @@ pub struct SeekOutcome {
     pub epoch: PlaybackEpoch,
 }
 
+/// pipeline 本轮从音频输出端收集到的观测
+///
+/// format 可能尚未确定，例如 decoder 还没有输出第一份 PCM。
+/// position 表示设备 observed_at 时刻已经播放了多少 PCM frame
+#[derive(Debug, Clone, Copy)]
+struct AudioClockObservation {
+    format: Option<AudioPcmFormat>,
+    position: AudioPlaybackPosition,
+}
+
+/// 音频设备帧数到媒体时间的映射
+///
+/// 未知采样率时不能进行换算；格式确定后，
+/// 将两个锚点交给 AudioClock；并保留这个映射。
 #[derive(Debug)]
-enum AudioClockState {
+enum AudioTimeMapping {
     WaitingForFormat {
         anchor_media: MediaTime,
         anchor_played_frames: u64,
@@ -71,7 +86,7 @@ enum AudioClockState {
     Ready(AudioClock),
 }
 
-impl AudioClockState {
+impl AudioTimeMapping {
     fn new(anchor_media: MediaTime, anchor_played_frames: u64) -> Self {
         Self::WaitingForFormat {
             anchor_media,
@@ -81,149 +96,277 @@ impl AudioClockState {
 
     fn snapshot(
         &mut self,
-        format: Option<AudioPcmFormat>,
-        position: AudioPlaybackPosition,
+        observation: AudioClockObservation,
     ) -> Result<ClockSnapshot, ClockError> {
         match self {
-            Self::Ready(clock) => clock.snapshot(position),
+            Self::Ready(clock) => clock.snapshot(observation.position),
             Self::WaitingForFormat {
                 anchor_media,
                 anchor_played_frames,
             } => {
-                let Some(format) = format else {
-                    return Ok(ClockSnapshot::new(*anchor_media, position.observed_at()));
+                let Some(format) = observation.format else {
+                    // 采样率未知时冻结媒体时间
+                    // 但快照的观察时刻使用本轮设备观测
+                    return Ok(ClockSnapshot::new(
+                        *anchor_media,
+                        observation.position.observed_at(),
+                    ));
                 };
+
                 let clock =
                     AudioClock::new(format.sample_rate(), *anchor_media, *anchor_played_frames)?;
-                let snapshot = clock.snapshot(position)?;
+
+                let snapshot = clock.snapshot(observation.position)?;
+
                 *self = Self::Ready(clock);
+
                 Ok(snapshot)
             }
         }
     }
 }
 
+/// 音频会话内部的计时阶段。
+///
+/// 音频暂时或永久交出计时职责
+/// 不会改变外层 PlaybackClockState::Audio 的会话身份。
 #[derive(Debug)]
-enum PlaybackClockSource {
-    Audio,
-    AudioStalled {
+enum AudioClockPhase {
+    FollowingAudio,
+
+    Stalled {
         clock: MonotonicClock,
         stalled_at_frames: u64,
     },
-    AudioEnded {
+
+    Ended {
         clock: MonotonicClock,
     },
 }
 
+/// 以音频设备为主要依据的会话时钟。
+///
+/// mapping 保存音频时间关系，临时接管期间也不修改它。
+/// phase 决定本轮使用设备时钟还是单调时间
 #[derive(Debug)]
-struct PlaybackClockState {
-    audio_clock: AudioClockState,
-    source: PlaybackClockSource,
+struct AudioDrivenClock {
+    mapping: AudioTimeMapping,
+    phase: AudioClockPhase,
+
+    /// 记录会话的运行意图。
+    ///
+    /// 音频设备自身由 pipeline 启停。
+    /// 此字段决定新建立的临时/尾部时钟是否立即运行
+    running: bool,
 }
 
-impl PlaybackClockState {
+impl AudioDrivenClock {
     fn new(anchor_media: MediaTime, anchor_played_frames: u64) -> Self {
         Self {
-            audio_clock: AudioClockState::new(anchor_media, anchor_played_frames),
-            source: PlaybackClockSource::Audio,
+            mapping: AudioTimeMapping::new(anchor_media, anchor_played_frames),
+            phase: AudioClockPhase::FollowingAudio,
+            running: false,
         }
     }
 
-    fn reanchor(&mut self, anchor_media: MediaTime, anchor_played_frames: u64) {
-        // seek 后重新建立音频时间映射
-        // 同时丢弃上一轮的临时时钟或尾部播放时钟
-        *self = Self::new(anchor_media, anchor_played_frames);
-    }
-
+    /// 只读取时间，不在读取过程中决定停滞、恢复或结束
     fn snapshot(
         &mut self,
-        format: Option<AudioPcmFormat>,
-        position: AudioPlaybackPosition,
+        observation: Option<AudioClockObservation>,
         now: Instant,
-    ) -> Result<ClockSnapshot, ClockError> {
-        // 快照只根据当前来源读取时间，不在这里决定切换策略
-        match &mut self.source {
-            PlaybackClockSource::Audio => self.audio_clock.snapshot(format, position),
-            PlaybackClockSource::AudioStalled { clock, .. }
-            | PlaybackClockSource::AudioEnded { clock } => clock.snapshot(now),
+    ) -> Result<ClockSnapshot, PlaybackPipelineError> {
+        match &mut self.phase {
+            AudioClockPhase::FollowingAudio => {
+                let observation =
+                    observation.ok_or(PlaybackPipelineError::MissingAudioClockObservation)?;
+
+                if observation.position.observed_at() > now {
+                    return Err(PlaybackPipelineError::Clock(
+                        ClockError::ObservationFromFuture,
+                    ));
+                }
+                self.mapping
+                    .snapshot(observation)
+                    .map_err(PlaybackPipelineError::Clock)
+            }
+            AudioClockPhase::Stalled { clock, .. } | AudioClockPhase::Ended { clock } => {
+                clock.snapshot(now).map_err(PlaybackPipelineError::Clock)
+            }
         }
     }
 
+    /// seek 后重新建立音频映射
+    ///
+    /// 旧的停滞或结束状态属于上一次播放位置
+    fn reanchor(&mut self, anchor_media: MediaTime, anchor_played_frames: u64) {
+        *self = Self::new(anchor_media, anchor_played_frames)
+    }
+
+    /// 因音频停滞而临时接管时间。
+    ///
+    /// 重复调用不会重建正在运行的单调时钟
     fn switch_to_fallback(&mut self, snapshot: ClockSnapshot, played_frames: u64) {
-        // 只有在使用音频时钟时，才进入临时接管状态。
-        // 重复调用不能重置已经运行的单调时钟。
-        if !matches!(&self.source, PlaybackClockSource::Audio) {
+        if !matches!(&self.phase, AudioClockPhase::FollowingAudio) {
             return;
         }
 
-        // 两个锚点来自同一份快照，保持时间对应关系。
-        let mut clock = MonotonicClock::new(snapshot.media_time());
-        clock.resume(snapshot.observed_at());
+        let clock = Self::monotonic_from_snapshot(snapshot, self.running);
 
-        self.source = PlaybackClockSource::AudioStalled {
+        self.phase = AudioClockPhase::Stalled {
             clock,
             stalled_at_frames: played_frames,
-        };
-        // audio_clock 没有被修改，恢复音频时还会使用它。
+        }
     }
 
+    /// 只有设备真正多播放了 PCM，才恢复音频
+    ///
+    /// decoder 产出新帧或 output 接收新帧，
+    /// 都不能证明声音已经继续播放。
     fn try_restore_audio_clock(&mut self, played_frames: u64) -> bool {
-        // 只有临时停滞且音频帧数实际增加，才允许恢复。
-        let should_restore = match &self.source {
-            PlaybackClockSource::AudioStalled {
+        let should_restore = match &self.phase {
+            AudioClockPhase::Stalled {
                 stalled_at_frames, ..
             } => played_frames > *stalled_at_frames,
-            PlaybackClockSource::Audio | PlaybackClockSource::AudioEnded { .. } => false,
+            AudioClockPhase::FollowingAudio | AudioClockPhase::Ended { .. } => false,
         };
-
         if should_restore {
-            // 恢复使用原有音频时钟。
-            // 不修改它的锚点，也不使用单调时钟的位置重新对齐它。
-            self.source = PlaybackClockSource::Audio;
+            // mapping 时钟保存原来的设备时间关系
+            self.phase = AudioClockPhase::FollowingAudio;
         }
         should_restore
     }
 
-    fn switch_to_monotonic(&mut self, snapshot: ClockSnapshot) {
-        // 把旧状态取出来，以便把其中的 clock 移动到新状态中。
-        // 临时放入 Audio，保证字段始终有一个合法值。
-        let previous_source = std::mem::replace(&mut self.source, PlaybackClockSource::Audio);
-        let clock = match previous_source {
-            PlaybackClockSource::Audio => {
-                // 之前由音频计时，现在根据最后的快照建立单调时钟
-                let mut clock = MonotonicClock::new(snapshot.media_time());
-                clock.resume(snapshot.observed_at());
-                clock
-            }
-            PlaybackClockSource::AudioStalled { clock, .. }
-            | PlaybackClockSource::AudioEnded { clock } => {
-                // 已经有单调时钟，直接保留
-                // 不重置锚点，也不改变暂停状态
-                clock
-            }
-        };
-        self.source = PlaybackClockSource::AudioEnded { clock };
-    }
+    /// 音频真正排空后，让单调时钟继续驱动视频尾部
+    fn finish_audio(&mut self, snapshot: ClockSnapshot) {
+        if matches!(&self.phase, AudioClockPhase::Ended { .. }) {
+            return;
+        }
 
-    fn pause(&mut self, now: Instant) -> Result<(), ClockError> {
-        match &mut self.source {
-            PlaybackClockSource::Audio => {
-                // AudioClock 依据设备播放帧数计算时间
-                // 音频设备的暂停由 AudioPipeline 负责。
-                Ok(())
-            }
-            PlaybackClockSource::AudioEnded { clock }
-            | PlaybackClockSource::AudioStalled { clock, .. } => clock.pause(now),
+        let replacement = AudioClockPhase::Ended {
+            clock: Self::monotonic_from_snapshot(snapshot, self.running),
+        };
+
+        let previous = std::mem::replace(&mut self.phase, replacement);
+        if let AudioClockPhase::Stalled { clock, .. } = previous {
+            // 已经存在临时时钟，保留它的锚点和暂停状态。
+            // 变化的是计时阶段，而不是时间本身。
+            self.phase = AudioClockPhase::Ended { clock }
         }
     }
 
     fn resume(&mut self, now: Instant) {
-        match &mut self.source {
-            PlaybackClockSource::Audio => {}
-            PlaybackClockSource::AudioEnded { clock }
-            | PlaybackClockSource::AudioStalled { clock, .. } => {
+        match &mut self.phase {
+            AudioClockPhase::FollowingAudio => {}
+            AudioClockPhase::Stalled { clock, .. } | AudioClockPhase::Ended { clock } => {
                 clock.resume(now);
             }
+        }
+        self.running = true
+    }
+
+    fn pause(&mut self, now: Instant) -> Result<(), ClockError> {
+        match &mut self.phase {
+            // 设备已经由 pipeline 暂停
+            AudioClockPhase::FollowingAudio => {}
+            AudioClockPhase::Stalled { clock, .. } | AudioClockPhase::Ended { clock } => {
+                clock.pause(now)?;
+            }
+        }
+        self.running = false;
+        Ok(())
+    }
+
+    /// 使用同一份快照中的媒体时间和观察时刻建立锚点
+    /// 使计时来源切换时保持关系
+    fn monotonic_from_snapshot(snapshot: ClockSnapshot, running: bool) -> MonotonicClock {
+        let mut clock = MonotonicClock::new(snapshot.media_time());
+
+        if running {
+            clock.resume(snapshot.observed_at());
+        }
+        clock
+    }
+}
+
+/// 会话级的两种计时模式
+///
+///  Audio 内部即使暂时使用单调计时，仍是音频会话；
+/// Monotonic 表示独立的单调计时模式，例如存视频
+#[derive(Debug)]
+enum PlaybackClockState {
+    Audio(AudioDrivenClock),
+    Monotonic(MonotonicClock),
+}
+
+impl PlaybackClockState {
+    fn new_audio(anchor_media: MediaTime, anchor_played_frames: u64) -> Self {
+        Self::Audio(AudioDrivenClock::new(anchor_media, anchor_played_frames))
+    }
+
+    fn new_monotonic(anchor_media: MediaTime) -> Self {
+        Self::Monotonic(MonotonicClock::new(anchor_media))
+    }
+
+    fn snapshot(
+        &mut self,
+        observation: Option<AudioClockObservation>,
+        now: Instant,
+    ) -> Result<ClockSnapshot, PlaybackPipelineError> {
+        match self {
+            Self::Audio(clock) => clock.snapshot(observation, now),
+
+            Self::Monotonic(clock) => clock.snapshot(now).map_err(PlaybackPipelineError::Clock),
+        }
+    }
+
+    /// seek 保留会话模式，但重建该模式的时间映射
+    /// 两种模式都会回到暂停状态。
+    fn reanchor(
+        &mut self,
+        anchor_media: MediaTime,
+        anchor_played_frames: Option<u64>,
+    ) -> Result<(), PlaybackPipelineError> {
+        match self {
+            Self::Audio(clock) => {
+                let played_frames = anchor_played_frames
+                    .ok_or(PlaybackPipelineError::MissingAudioClockObservation)?;
+                clock.reanchor(anchor_media, played_frames);
+            }
+            Self::Monotonic(clock) => *clock = MonotonicClock::new(anchor_media),
+        }
+        Ok(())
+    }
+
+    fn switch_to_fallback(&mut self, snapshot: ClockSnapshot, played_frames: u64) {
+        if let Self::Audio(clock) = self {
+            clock.switch_to_fallback(snapshot, played_frames);
+        }
+    }
+
+    fn try_restore_audio_clock(&mut self, played_frames: u64) -> bool {
+        match self {
+            Self::Audio(clock) => clock.try_restore_audio_clock(played_frames),
+            Self::Monotonic(_) => false,
+        }
+    }
+
+    fn finish_audio(&mut self, snapshot: ClockSnapshot) {
+        if let Self::Audio(clock) = self {
+            clock.finish_audio(snapshot);
+        }
+    }
+
+    fn resume(&mut self, now: Instant) {
+        match self {
+            Self::Audio(clock) => clock.resume(now),
+            Self::Monotonic(clock) => clock.resume(now),
+        }
+    }
+
+    fn pause(&mut self, now: Instant) -> Result<(), ClockError> {
+        match self {
+            Self::Audio(clock) => clock.pause(now),
+            Self::Monotonic(clock) => clock.pause(now),
         }
     }
 }
@@ -300,7 +443,7 @@ where
             .playback_position()
             .map_err(PlaybackPipelineError::Audio)?;
 
-        let clock = PlaybackClockState::new(start_time, position.played_frames());
+        let clock = PlaybackClockState::new_audio(start_time, position.played_frames());
 
         Ok(Self {
             demuxer,
@@ -496,22 +639,20 @@ where
             self.clock.try_restore_audio_clock(position.played_frames());
         }
 
-        let clock_snapshot = self
-            .clock
-            .snapshot(format, position, Instant::now())
-            .map_err(PlaybackPipelineError::Clock)?;
+        let clock_snapshot = self.clock.snapshot(
+            Some(AudioClockObservation { format, position }),
+            Instant::now(),
+        )?;
 
         // 真正播放结束后，进入视频尾部的持续计时状态。
         if audio_finished {
-            self.clock.switch_to_monotonic(clock_snapshot);
+            self.clock.finish_audio(clock_snapshot);
         }
-        // 同步判断的时间不能早于快照的观察时刻。
-        let now = Instant::now();
 
         // 每轮只推进一次视频分支
         let video_result = match self.video.as_mut() {
             Some(video) => video
-                .step(clock_snapshot, now)
+                .step(clock_snapshot, Instant::now())
                 .map_err(PlaybackPipelineError::Video)?,
             None => return Ok(VideoPipelineStepResult::DecoderDrained),
         };
@@ -624,7 +765,7 @@ where
         }
         self.audio.set_presentation_boundary(presentation_boundary);
         self.clock
-            .reanchor(presentation_boundary, position.played_frames());
+            .reanchor(presentation_boundary, Some(position.played_frames()));
         self.audio_progress.reset();
 
         self.epoch = new_epoch;
@@ -640,9 +781,10 @@ where
     pub fn clock_snapshot(&mut self) -> Result<ClockSnapshot, PlaybackPipelineError> {
         let position = self.playback_position()?;
         let format = self.audio.output_format();
-        self.clock
-            .snapshot(format, position, Instant::now())
-            .map_err(PlaybackPipelineError::Clock)
+        self.clock.snapshot(
+            Some(AudioClockObservation { format, position }),
+            Instant::now(),
+        )
     }
 
     pub fn playback_position(&mut self) -> Result<AudioPlaybackPosition, PlaybackPipelineError> {
