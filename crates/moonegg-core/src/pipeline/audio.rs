@@ -58,6 +58,11 @@ pub struct AudioPipeline<D, O> {
 
     phase: AudioPhase,
     presentation_boundary: MediaTime,
+
+    /// 当前代次中，首份被输出端接收的非空 PCM 的 PTS，
+    ///
+    /// 它描述输出数据的媒体起点，不代表已经实际播放。
+    first_submitted_pts: Option<MediaTime>,
 }
 
 impl<D, O> AudioPipeline<D, O>
@@ -85,6 +90,7 @@ where
             pending_frame: None,
             phase: AudioPhase::Feeding,
             presentation_boundary,
+            first_submitted_pts: None,
         })
     }
 
@@ -173,12 +179,20 @@ where
             return Ok(false);
         };
 
+        let pts = frame.pts();
+        let has_pcm = frame.payload().frame_count() > 0;
+
         match self
             .output
             .submit(frame)
             .map_err(AudioPipelineError::Output)?
         {
-            AudioSubmitResult::Accepted => Ok(true),
+            AudioSubmitResult::Accepted => {
+                if has_pcm && self.first_submitted_pts.is_none() {
+                    self.first_submitted_pts = Some(pts);
+                }
+                Ok(true)
+            }
 
             AudioSubmitResult::Backpressure(frame) => {
                 self.pending_frame = Some(frame);
@@ -263,6 +277,9 @@ where
 
         self.output.flush().map_err(AudioPipelineError::Output)?;
 
+        // 旧代次的 PCM 起点不能用于新位置。
+        self.first_submitted_pts = None;
+
         self.epoch = new_epoch;
         self.phase = AudioPhase::Feeding;
 
@@ -293,6 +310,10 @@ where
 
     pub(super) fn set_presentation_boundary(&mut self, boundary: MediaTime) {
         self.presentation_boundary = boundary
+    }
+
+    pub fn first_submitted_pts(&self) -> Option<MediaTime> {
+        self.first_submitted_pts
     }
 
     fn trim_audio_before(
@@ -398,6 +419,10 @@ where
     fn set_presentation_boundary(&mut self, boundary: MediaTime) {
         AudioPipeline::set_presentation_boundary(self, boundary);
     }
+
+    fn first_submitted_pts(&self) -> Option<MediaTime> {
+        AudioPipeline::first_submitted_pts(self)
+    }
 }
 
 pub(crate) trait AudioBranch {
@@ -421,4 +446,6 @@ pub(crate) trait AudioBranch {
     fn is_finished(&mut self) -> Result<bool, AudioPipelineError>;
 
     fn set_presentation_boundary(&mut self, boundary: MediaTime);
+    /// 当前代次首份被输出端接收的非空 PCM 的媒体起点
+    fn first_submitted_pts(&self) -> Option<MediaTime>;
 }

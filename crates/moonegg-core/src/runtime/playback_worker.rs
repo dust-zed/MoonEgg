@@ -93,6 +93,10 @@ where
                 self.feedback
                     .seek_completed(seek_outcome.requested, seek_outcome.landed)
                     .map_err(|_| PlaybackError::Runtime(RuntimeError::FeedbackDisconnected))?;
+
+                self.feedback
+                    .audio_progress(seek_outcome.presentation_boundary)
+                    .map_err(|_| PlaybackError::Runtime(RuntimeError::FeedbackDisconnected))?;
             }
         }
         Ok(())

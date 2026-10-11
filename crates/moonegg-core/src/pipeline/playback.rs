@@ -56,10 +56,19 @@ pub enum PlaybackPipelineError {
     MissingAudioClockObservation,
 }
 
+/// seek 成功后建立的位置关系。
+///
+/// 成功表示管线已经完成重定位，
+/// 不表示第一份音频或视频已经实际呈现
 #[derive(Debug, Clone, Copy)]
 pub struct SeekOutcome {
+    /// 用户原始请求
     pub requested: MediaTime,
+    /// demuxer 实际返回的读取落点
     pub landed: MediaTime,
+    /// 最早允许呈现内容的媒体时间
+    pub presentation_boundary: MediaTime,
+    /// 本次重定位所属的播放代次
     pub epoch: PlaybackEpoch,
 }
 
@@ -70,6 +79,8 @@ pub struct SeekOutcome {
 #[derive(Debug, Clone, Copy)]
 struct AudioClockObservation {
     format: Option<AudioPcmFormat>,
+    /// 当前代次首份被输出端接收的非空 PCM 的 PTS
+    first_submitted_pts: Option<MediaTime>,
     position: AudioPlaybackPosition,
 }
 
@@ -79,18 +90,20 @@ struct AudioClockObservation {
 /// 将两个锚点交给 AudioClock；并保留这个映射。
 #[derive(Debug)]
 enum AudioTimeMapping {
-    WaitingForFormat {
-        anchor_media: MediaTime,
-        anchor_played_frames: u64,
+    WaitingForAudio {
+        // 尚未确定实际 PCM 起点时，对外保持的逻辑位置
+        provisional_media: MediaTime,
+        /// 新位置开始前读取的设备计数基准
+        based_played_frames: u64,
     },
     Ready(AudioClock),
 }
 
 impl AudioTimeMapping {
-    fn new(anchor_media: MediaTime, anchor_played_frames: u64) -> Self {
-        Self::WaitingForFormat {
-            anchor_media,
-            anchor_played_frames,
+    fn new(provisional_media: MediaTime, based_played_frames: u64) -> Self {
+        Self::WaitingForAudio {
+            provisional_media,
+            based_played_frames,
         }
     }
 
@@ -100,21 +113,22 @@ impl AudioTimeMapping {
     ) -> Result<ClockSnapshot, ClockError> {
         match self {
             Self::Ready(clock) => clock.snapshot(observation.position),
-            Self::WaitingForFormat {
-                anchor_media,
-                anchor_played_frames,
+            Self::WaitingForAudio {
+                provisional_media,
+                based_played_frames,
             } => {
-                let Some(format) = observation.format else {
+                let (Some(format), Some(first_pts)) =
+                    (observation.format, observation.first_submitted_pts)
+                else {
                     // 采样率未知时冻结媒体时间
                     // 但快照的观察时刻使用本轮设备观测
                     return Ok(ClockSnapshot::new(
-                        *anchor_media,
+                        *provisional_media,
                         observation.position.observed_at(),
                     ));
                 };
 
-                let clock =
-                    AudioClock::new(format.sample_rate(), *anchor_media, *anchor_played_frames)?;
+                let clock = AudioClock::new(format.sample_rate(), first_pts, *based_played_frames)?;
 
                 let snapshot = clock.snapshot(observation.position)?;
 
@@ -626,7 +640,7 @@ where
         // 本轮只读取一次音频位置。
         // 停滞判断、恢复判断和时钟快照，都使用这份观测
         let position = self.playback_position()?;
-        let format = self.audio.output_format();
+        let observation = self.observe_audio_clock()?;
 
         let audio_stalled = self
             .audio_progress
@@ -639,10 +653,7 @@ where
             self.clock.try_restore_audio_clock(position.played_frames());
         }
 
-        let clock_snapshot = self.clock.snapshot(
-            Some(AudioClockObservation { format, position }),
-            Instant::now(),
-        )?;
+        let clock_snapshot = self.clock.snapshot(Some(observation), Instant::now())?;
 
         // 真正播放结束后，进入视频尾部的持续计时状态。
         if audio_finished {
@@ -741,31 +752,38 @@ where
             });
         }
 
+        let presentation_boundary = self.media_start.max(target);
+
         self.pending_packet = None;
+
         self.audio
             .reset(new_epoch)
             .map_err(PlaybackPipelineError::Audio)?;
-
-        let landed = self
-            .demuxer
-            .seek(target)
-            .map_err(PlaybackPipelineError::Demux)?;
-
-        let position = self
-            .audio
-            .playback_position()
-            .map_err(PlaybackPipelineError::Audio)?;
-        let presentation_boundary = self.media_start.max(landed);
-
         if let Some(video) = self.video.as_mut() {
             video
                 .reset(new_epoch)
                 .map_err(PlaybackPipelineError::Video)?;
+        }
+
+        // demuxer 可以落到更早的位置，为解码提供必要的参考数据。
+        let landed = self
+            .demuxer
+            .seek(presentation_boundary)
+            .map_err(PlaybackPipelineError::Demux)?;
+        // reset 后重新读取设备计数，不假定 flush 会将它归零。
+        let position = self
+            .audio
+            .playback_position()
+            .map_err(PlaybackPipelineError::Audio)?;
+
+        self.audio.set_presentation_boundary(presentation_boundary);
+        if let Some(video) = self.video.as_mut() {
             video.set_presentation_boundary(presentation_boundary);
         }
-        self.audio.set_presentation_boundary(presentation_boundary);
+
         self.clock
-            .reanchor(presentation_boundary, Some(position.played_frames()));
+            .reanchor(presentation_boundary, Some(position.played_frames()))?;
+
         self.audio_progress.reset();
 
         self.epoch = new_epoch;
@@ -773,18 +791,15 @@ where
 
         Ok(SeekOutcome {
             requested: target,
-            landed: presentation_boundary,
+            landed,
+            presentation_boundary,
             epoch: new_epoch,
         })
     }
 
     pub fn clock_snapshot(&mut self) -> Result<ClockSnapshot, PlaybackPipelineError> {
-        let position = self.playback_position()?;
-        let format = self.audio.output_format();
-        self.clock.snapshot(
-            Some(AudioClockObservation { format, position }),
-            Instant::now(),
-        )
+        let observation = self.observe_audio_clock()?;
+        self.clock.snapshot(Some(observation), Instant::now())
     }
 
     pub fn playback_position(&mut self) -> Result<AudioPlaybackPosition, PlaybackPipelineError> {
@@ -807,5 +822,14 @@ where
             None => true,
         };
         Ok(audio_finished && video_drained)
+    }
+
+    fn observe_audio_clock(&mut self) -> Result<AudioClockObservation, PlaybackPipelineError> {
+        let position = self.playback_position()?;
+        Ok(AudioClockObservation {
+            format: self.audio.output_format(),
+            first_submitted_pts: self.audio.first_submitted_pts(),
+            position,
+        })
     }
 }
