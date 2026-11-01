@@ -13,18 +13,50 @@ use crate::{
     player::{PlayerCommand, PlayerEvent},
     ports::{AudioBackendFactory, AudioOutputFactory, VideoBackendFactory},
     runtime::{
-        AvBackendPlaybackFactory, BackendPlaybackFactory, ControlLoop, ControlLoopExit,
+        self, AvBackendPlaybackFactory, BackendPlaybackFactory, ControlLoop, ControlLoopExit,
         ControlMessage, ControlResult, EffectExecutor, EffectLoopExit, PlaybackEffectExecutor,
         PlaybackPipelineFactory, ShutdownReport, ThreadTermination, run_effect_loop,
     },
     source::FileSource,
 };
 
-pub struct PlayerEngine {
+struct EngineRuntime {
     message_sender: Sender<ControlMessage>,
-    event_receiver: Receiver<PlayerEvent>,
     control_thread: JoinHandle<ControlLoopExit>,
     effect_thread: JoinHandle<EffectLoopExit>,
+}
+
+impl EngineRuntime {
+    fn shutdown(self) -> ShutdownReport {
+        let EngineRuntime {
+            message_sender,
+            control_thread,
+            effect_thread,
+        } = self;
+
+        let release_sent = message_sender
+            .send(ControlMessage::Command(PlayerCommand::Release))
+            .is_ok();
+        let control = match control_thread.join() {
+            Err(_) => ThreadTermination::Panicked,
+            Ok(exit) => ThreadTermination::Exited(exit),
+        };
+        let effect = match effect_thread.join() {
+            Err(_) => ThreadTermination::Panicked,
+            Ok(exit) => ThreadTermination::Exited(exit),
+        };
+
+        ShutdownReport {
+            release_sent,
+            control,
+            effect,
+        }
+    }
+}
+
+pub struct PlayerEngine {
+    runtime: Option<EngineRuntime>,
+    event_receiver: Receiver<PlayerEvent>,
 }
 
 impl PlayerEngine {
@@ -61,10 +93,12 @@ impl PlayerEngine {
         };
 
         Ok(Self {
-            message_sender,
+            runtime: Some(EngineRuntime {
+                message_sender,
+                control_thread,
+                effect_thread,
+            }),
             event_receiver,
-            control_thread,
-            effect_thread,
         })
     }
 
@@ -106,7 +140,11 @@ impl PlayerEngine {
     }
 
     pub fn send_command(&self, command: PlayerCommand) -> Result<(), SendError<ControlMessage>> {
-        self.message_sender.send(ControlMessage::Command(command))
+        let message = ControlMessage::Command(command);
+        let Some(runtime) = self.runtime.as_ref() else {
+            return Err(SendError(message));
+        };
+        runtime.message_sender.send(message)
     }
 
     pub(crate) fn recv_event(&self) -> Result<PlayerEvent, RecvError> {
@@ -117,34 +155,12 @@ impl PlayerEngine {
         self.event_receiver.try_recv()
     }
 
-    pub fn shutdown(self) -> ShutdownReport {
-        let PlayerEngine {
-            message_sender,
-            event_receiver,
-            control_thread,
-            effect_thread,
-        } = self;
-
-        let release_sent = message_sender
-            .send(ControlMessage::Command(PlayerCommand::Release))
-            .is_ok();
-        let effect = match effect_thread.join() {
-            Ok(exit) => ThreadTermination::Exited(exit),
-            Err(_) => ThreadTermination::Panicked,
-        };
-
-        let control = match control_thread.join() {
-            Ok(exit) => ThreadTermination::Exited(exit),
-            Err(_) => ThreadTermination::Panicked,
-        };
-
-        drop(event_receiver);
-
-        ShutdownReport {
-            release_sent,
-            control,
-            effect,
-        }
+    pub fn shutdown(mut self) -> ShutdownReport {
+        let runtime = self
+            .runtime
+            .take()
+            .expect("尚未析构的 PlayerEngine 必须持有运行时");
+        runtime.shutdown()
     }
 
     pub(crate) fn new_audio<F>(factory: F) -> io::Result<Self>
@@ -156,5 +172,13 @@ impl PlayerEngine {
 
     pub fn recv_event_timeout(&self, timeout: Duration) -> Result<PlayerEvent, RecvTimeoutError> {
         self.event_receiver.recv_timeout(timeout)
+    }
+}
+
+impl Drop for PlayerEngine {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            let _ = runtime.shutdown();
+        }
     }
 }
