@@ -73,6 +73,7 @@ impl PlayerController {
             PlayerCommand::Seek(target) => ControlEffect::Seek {
                 target,
                 epoch: next_epoch,
+                resume_after_seek: next == PlayerState::Playing,
             },
             PlayerCommand::Stop => ControlEffect::Stop { epoch: next_epoch },
             PlayerCommand::Release => ControlEffect::Release { epoch: next_epoch },

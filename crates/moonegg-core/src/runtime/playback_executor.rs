@@ -90,9 +90,17 @@ where
                 self.send_to_worker(PlaybackWorkerAction::Pause, feedback)
             }
 
-            ControlEffect::Seek { target, .. } => {
-                self.send_to_worker(PlaybackWorkerAction::Seek { target }, feedback)
-            }
+            ControlEffect::Seek {
+                target,
+                resume_after_seek,
+                ..
+            } => self.send_to_worker(
+                PlaybackWorkerAction::Seek {
+                    target,
+                    resume_after_seek,
+                },
+                feedback,
+            ),
 
             ControlEffect::Stop { .. }
             | ControlEffect::Release { .. }

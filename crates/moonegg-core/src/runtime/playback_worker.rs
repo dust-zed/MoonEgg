@@ -19,7 +19,10 @@ use crate::{
 pub(crate) enum PlaybackWorkerAction {
     Start,
     Pause,
-    Seek { target: MediaTime },
+    Seek {
+        target: MediaTime,
+        resume_after_seek: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -79,17 +82,22 @@ where
                 self.running = false;
             }
 
-            PlaybackWorkerAction::Seek { target } => {
+            PlaybackWorkerAction::Seek {
+                target,
+                resume_after_seek,
+            } => {
                 let seek_outcome = pipeline
                     .seek(target, command_epoch)
                     .map_err(PlaybackError::Pipeline)?;
 
+                if resume_after_seek {
+                    pipeline.start().map_err(PlaybackError::Pipeline)?;
+                }
+
+                self.running = resume_after_seek;
                 self.decoder_drained = false;
                 self.completion_reported = false;
 
-                if self.running {
-                    pipeline.start().map_err(PlaybackError::Pipeline)?;
-                }
                 self.feedback
                     .seek_completed(seek_outcome.requested, seek_outcome.landed)
                     .map_err(|_| PlaybackError::Runtime(RuntimeError::FeedbackDisconnected))?;

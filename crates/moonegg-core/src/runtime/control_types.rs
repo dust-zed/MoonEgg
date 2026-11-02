@@ -28,6 +28,7 @@ pub enum ControlEffect {
     Seek {
         target: MediaTime,
         epoch: PlaybackEpoch,
+        resume_after_seek: bool,
     },
     Stop {
         epoch: PlaybackEpoch,
